@@ -1,0 +1,144 @@
+# Alertmanager: receives firing alerts from Prometheus, groups them, drops
+# duplicates and symptoms (inhibit rules), and emails them.
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+spec:
+  selector:
+    app.kubernetes.io/name: alertmanager
+  ports:
+    - name: web
+      port: 9093
+      targetPort: web
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alertmanager
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534 # "nobody", as in the official image
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.35.0
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+          ports:
+            - name: web
+              containerPort: 9093
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: web
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: web
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+            - name: data # silences and which alerts were already sent
+              mountPath: /alertmanager
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+        - name: data
+          emptyDir: {}
+---
+# Mailpit: a fake mail server with a web inbox, so you can SEE the alert
+# emails without a real email account. Local learning only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailpit
+spec:
+  selector:
+    app.kubernetes.io/name: mailpit
+  ports:
+    - name: smtp
+      port: 1025
+      targetPort: smtp
+    - name: web
+      port: 8025
+      targetPort: web
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailpit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mailpit
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mailpit
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mailpit
+          image: axllent/mailpit:v1.34.0
+          env:
+            - name: MP_MAX_MESSAGES # keep the newest 500 emails, delete older ones
+              value: "500"
+          ports:
+            - name: smtp
+              containerPort: 1025
+            - name: web
+              containerPort: 8025
+          readinessProbe:
+            tcpSocket: # ready once it accepts mail
+              port: smtp
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi

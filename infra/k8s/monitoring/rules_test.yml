@@ -182,3 +182,53 @@ tests:
       - eval_time: 10m
         alertname: QuickServeOutboxDeadLetters
         exp_alerts: []
+
+  # 9. The Watchdog always fires: it's how we know alerting itself works.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+            exp_annotations:
+              summary: "Monitoring is working: this alert always fires (the dead man's switch)"
+
+  # 10. Rightsizing: two API pods each burn 0.03 s of CPU per second (30m) and
+  # hold 100 MiB; the worker uses 0.01 cores and 80 MiB. Per-pod and per-app.
+  - interval: 1m
+    input_series:
+      - series: 'process_cpu_seconds_total{job="quickserve",app="api",pod="api-1"}'
+        values: "0+1.8x10" # +1.8 s per 60 s = 0.03 cores
+      - series: 'process_cpu_seconds_total{job="quickserve",app="api",pod="api-2"}'
+        values: "0+1.8x10"
+      - series: 'process_cpu_seconds_total{job="quickserve",app="worker",pod="worker-1"}'
+        values: "0+0.6x10" # 0.01 cores
+      - series: 'process_resident_memory_bytes{job="quickserve",app="api",pod="api-1"}'
+        values: "104857600x10" # 100 MiB
+      - series: 'process_resident_memory_bytes{job="quickserve",app="api",pod="api-2"}'
+        values: "104857600x10"
+      - series: 'process_resident_memory_bytes{job="quickserve",app="worker",pod="worker-1"}'
+        values: "83886080x10" # 80 MiB
+    promql_expr_test:
+      # round(): rate() of floats is 0.030000000000000013, not exactly 0.03.
+      - expr: round(quickserve:pod_cpu_cores:rate5m{pod="api-1"}, 0.001)
+        eval_time: 10m
+        exp_samples:
+          - labels: '{app="api",pod="api-1"}'
+            value: 0.03
+      - expr: round(quickserve:app_cpu_cores:rate5m, 0.001)
+        eval_time: 10m
+        exp_samples:
+          - labels: '{app="api"}'
+            value: 0.06
+          - labels: '{app="worker"}'
+            value: 0.01
+      - expr: quickserve:app_memory_bytes
+        eval_time: 10m
+        exp_samples:
+          - labels: 'quickserve:app_memory_bytes{app="api"}'
+            value: 209715200
+          - labels: 'quickserve:app_memory_bytes{app="worker"}'
+            value: 83886080

@@ -92,9 +92,11 @@ kubectl -n "$NS" rollout status deployment/api --timeout=300s
 kubectl -n "$NS" rollout status deployment/worker --timeout=300s
 kubectl -n "$NS" rollout status deployment/notifier --timeout=300s
 
-echo "Waiting for Prometheus and Grafana..."
+echo "Waiting for Prometheus, Grafana, Alertmanager and Mailpit..."
 kubectl -n "$NS" rollout status deployment/prometheus --timeout=180s
 kubectl -n "$NS" rollout status deployment/grafana --timeout=180s
+kubectl -n "$NS" rollout status deployment/alertmanager --timeout=120s
+kubectl -n "$NS" rollout status deployment/mailpit --timeout=120s
 
 kubectl -n "$NS" get pods
 echo
@@ -102,3 +104,8 @@ echo "Deployed. Open it with (each in its own terminal):"
 echo "  kubectl -n $NS port-forward service/api 8003:80          -> http://127.0.0.1:8003/docs"
 echo "  kubectl -n $NS port-forward service/grafana 3005:3000    -> http://127.0.0.1:3005  (dashboards)"
 echo "  kubectl -n $NS port-forward service/prometheus 9095:9090 -> http://127.0.0.1:9095  (raw metrics, alerts)"
+echo "  kubectl -n $NS port-forward service/alertmanager 9096:9093 -> http://127.0.0.1:9096 (grouped alerts, silences)"
+echo "  kubectl -n $NS port-forward service/mailpit 8026:8025    -> http://127.0.0.1:8026  (the alert emails)"
+echo
+echo "FinOps: what the pods reserve vs what they use:"
+echo "  python3 infra/k8s/rightsizing.py"
