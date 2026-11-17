@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Deploy QuickServe to the current Kubernetes cluster, in the right order.
 #
-#   infra/k8s/deploy.sh                       # minikube on your Mac
-#   infra/k8s/deploy.sh infra/k8s/overlays/ci # what CI uses
+#   infra/k8s/deploy.sh                       # minikube: deploys the image of the commit you have checked out
+#   IMAGE_TAG=main infra/k8s/deploy.sh        # ...or whatever `main` points to right now
+#   infra/k8s/deploy.sh infra/k8s/overlays/ci # what CI uses (an image built in the job)
 #
 # Order: database and Redis -> migration Job -> API and worker. The API and
 # worker pods also wait for the migration themselves (init containers), so the
@@ -11,6 +12,52 @@ set -euo pipefail
 
 OVERLAY="${1:-infra/k8s/overlays/local}"
 NS=quickserve
+REPO=revant123/quickserve
+
+# Is this tag published on ghcr.io? (Public package: an anonymous token is enough.)
+image_exists() {
+  local token
+  token=$(curl -fsS "https://ghcr.io/token?scope=repository:${REPO}:pull" | sed -E 's/.*"token":"([^"]+)".*/\1/')
+  curl -fsS -o /dev/null -H "Authorization: Bearer ${token}" \
+    -H "Accept: application/vnd.oci.image.index.v1+json" \
+    "https://ghcr.io/v2/${REPO}/manifests/$1"
+}
+
+if [[ "$OVERLAY" != *ci* ]]; then
+  # Deploy EXACTLY the commit you have checked out: its immutable sha- tag,
+  # not the moving `main` tag. Right after a merge, `main` on ghcr.io still
+  # points to the PREVIOUS build until CI finishes publishing (~3-5 minutes),
+  # so "deploy main" would silently run old code. A sha tag can't be stale:
+  # it either exists or it doesn't.
+  TAG="${IMAGE_TAG:-sha-$(git rev-parse HEAD | cut -c1-7)}"
+  if [[ -n "$(git status --porcelain -- app migrations scripts)" ]]; then
+    echo "Note: you have uncommitted changes in app/, migrations/ or scripts/. They are NOT in the image."
+  fi
+  if [[ -z "${IMAGE_TAG:-}" ]] && ! git merge-base --is-ancestor HEAD origin/main 2>/dev/null; then
+    echo "Your checked-out commit isn't on main (are you on a feature branch?). CI only publishes"
+    echo "images for main, so there is no image for it. Run: git checkout main && git pull"
+    echo "or deploy the newest main build: IMAGE_TAG=main infra/k8s/deploy.sh"
+    exit 1
+  fi
+  waited=0
+  until image_exists "$TAG"; do
+    if (( waited >= ${WAIT_MINUTES:-10} * 60 )); then
+      echo "ghcr.io/${REPO}:${TAG} still isn't published after ${WAIT_MINUTES:-10} minutes."
+      echo "CI publishes images only for commits on main. Check the 'publish' job on GitHub Actions,"
+      echo "or deploy the newest main build instead: IMAGE_TAG=main infra/k8s/deploy.sh"
+      exit 1
+    fi
+    echo "Waiting for CI to publish ghcr.io/${REPO}:${TAG} (checked ${waited}s so far)..."
+    sleep 20
+    waited=$((waited + 20))
+  done
+  echo "Deploying ghcr.io/${REPO}:${TAG}"
+
+  # Render the overlay and swap the tag. (Kustomize can't take the tag from a
+  # variable, and an overlay can't point at an absolute path, so a one-line
+  # substitution on the rendered YAML is the simplest honest way.)
+  render() { kubectl kustomize "$OVERLAY" | sed "s#ghcr.io/${REPO}:main#ghcr.io/${REPO}:${TAG}#g"; }
+fi
 
 # A Job's pod spec can't change after it's created. Delete last deploy's Job so
 # this deploy's image runs its migrations.
@@ -19,7 +66,11 @@ kubectl -n "$NS" delete job migrate --ignore-not-found --wait=true >/dev/null 2>
 # Was QuickServe already running before this deploy?
 ALREADY_DEPLOYED=$(kubectl -n "$NS" get deployment api -o name 2>/dev/null || true)
 
-kubectl apply -k "$OVERLAY"
+if [[ "$OVERLAY" != *ci* ]]; then
+  render | kubectl apply -f -
+else
+  kubectl apply -k "$OVERLAY"
+fi
 
 echo "Waiting for PostgreSQL and Redis..."
 kubectl -n "$NS" rollout status statefulset/postgres --timeout=180s
@@ -28,12 +79,10 @@ kubectl -n "$NS" rollout status deployment/redis --timeout=120s
 echo "Waiting for the migration Job..."
 kubectl -n "$NS" wait --for=condition=complete job/migrate --timeout=300s
 
-# The local overlay runs the moving `main` tag. If nothing in the YAML changed,
-# `kubectl apply` leaves the old pods alone, still on yesterday's code. A
-# restart makes new pods, and imagePullPolicy: Always makes them fetch the
-# newest `main` from ghcr.io. (Immutable sha- tags don't need this: a new tag
-# is a change in the YAML, so Kubernetes rolls the pods by itself.)
-if [[ -n "$ALREADY_DEPLOYED" && "$OVERLAY" != *ci* ]]; then
+# A new sha- tag is a change in the YAML, so Kubernetes rolls the pods by itself;
+# the same sha- tag means nothing changed, and nothing should restart. Only the
+# moving `main` tag (IMAGE_TAG=main) needs a restart to fetch a newer build.
+if [[ -n "$ALREADY_DEPLOYED" && "${TAG:-}" == "main" ]]; then
   echo "Restarting the API and worker to pick up the newest image..."
   kubectl -n "$NS" rollout restart deployment/api deployment/worker deployment/notifier
 fi
