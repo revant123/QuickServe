@@ -1,0 +1,12 @@
+# CI (kind): the image built from this commit, loaded straight into the
+# cluster with `kind load docker-image quickserve:ci`, so nothing is pulled.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - name: quickserve
+    newName: quickserve
+    newTag: ci

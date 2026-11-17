@@ -1,0 +1,147 @@
+# The API: a Deployment (identical, replaceable pods), a Service (one stable
+# address in front of them), an autoscaler and a disruption budget.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+spec:
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  # No `replicas:` here on purpose. The HorizontalPodAutoscaler below owns the
+  # pod count; a number here would reset it on every `kubectl apply`.
+  revisionHistoryLimit: 5 # how many old versions `kubectl rollout undo` can go back to
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1 # start one new pod first...
+      maxUnavailable: 0 # ...and only then stop an old one: no gap in service
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001 # the "app" user created in the Dockerfile
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Don't start until the migration Job has brought the schema up to date.
+        - name: wait-for-migrations
+          image: quickserve
+          command: ["python", "-m", "scripts.wait_for_migrations", "--timeout", "300"]
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      containers:
+        - name: api
+          image: quickserve # Kustomize replaces this with the real image and tag
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          # Readiness: "send me traffic?" /health/ready checks the database.
+          # When it fails, the pod is taken out of the Service but NOT restarted.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+          # Liveness: "is the process stuck?" /health only checks the process.
+          # It must NOT check the database: if PostgreSQL goes down, restarting
+          # every API pod fixes nothing and makes the recovery slower.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            # When a pod is told to stop, Kubernetes removes it from the Service
+            # at the same time. Waiting 5 s first lets in-flight requests and
+            # slow-to-update routes drain, so no request hits a closing pod.
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true # the app never writes to its own files
+            capabilities:
+              drop: ["ALL"]
+          # requests: what the scheduler reserves on a node (what you pay for).
+          # limits: the ceiling; above the memory limit the pod is killed.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+# Add pods when average CPU passes 70% of the request, remove them when it
+# falls. Needs the metrics-server add-on (`minikube addons enable metrics-server`).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 2 # two, so one can die or be replaced without downtime
+  maxReplicas: 5 # FinOps: a ceiling, so a traffic spike or a bug can't scale the bill forever
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+# During voluntary disruptions (a node drained for an upgrade), keep at least
+# one API pod running.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api

@@ -241,3 +241,68 @@ jobs:
           for f in infra/bootstrap/.terraform.lock.hcl infra/envs/dev/.terraform.lock.hcl; do
             test "$(git status --porcelain "$f")" = "" || { echo "::error::$f changed during init: run terraform providers lock"; exit 1; }
           done
+
+  # Phase 7: run the whole app on a real (throwaway) Kubernetes cluster.
+  # kind = "Kubernetes in Docker": a full cluster inside one container, gone
+  # when the job ends. Same manifests as minikube on your Mac.
+  kubernetes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      KIND_VERSION: v0.33.0
+      NS: quickserve
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate the manifests against the Kubernetes schema
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          for overlay in local ci; do
+            kubectl kustomize "infra/k8s/overlays/$overlay" | ./kubeconform -strict -summary -
+          done
+
+      - name: Build this commit's image
+        run: docker build -t quickserve:ci .
+
+      - name: Create a kind cluster and load the image into it
+        run: |
+          curl -sSLo kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+          chmod +x kind && sudo mv kind /usr/local/bin/kind
+          kind create cluster --name quickserve --wait 120s
+          kind load docker-image quickserve:ci --name quickserve
+
+      - name: Deploy (database, Redis, migration Job, API, worker)
+        run: infra/k8s/deploy.sh infra/k8s/overlays/ci
+
+      - name: Smoke test from inside the cluster
+        run: |
+          kubectl -n $NS exec deploy/api -- python -m scripts.seed
+          kubectl -n $NS exec -i deploy/worker -- python - check < infra/k8s/smoke_test.py
+          test "$(kubectl -n $NS exec deploy/api -- id -u)" = "10001"   # not root
+          kubectl -n $NS get hpa,pdb
+
+      - name: Rolling update with zero failed requests
+        run: |
+          kubectl -n $NS exec -i deploy/worker -- python - watch 60 < infra/k8s/smoke_test.py > watch.json &
+          WATCHER=$!
+          sleep 5
+          kubectl -n $NS rollout restart deployment/api
+          kubectl -n $NS rollout status deployment/api --timeout=180s
+          wait $WATCHER || { echo "::error::requests failed during the rolling update: $(cat watch.json)"; exit 1; }
+          echo "During the rollout: $(cat watch.json)"
+
+      - name: Self-healing - delete an API pod, Kubernetes replaces it
+        run: |
+          POD=$(kubectl -n $NS get pods -l app.kubernetes.io/name=api -o jsonpath='{.items[0].metadata.name}')
+          kubectl -n $NS delete pod "$POD" --wait=false
+          kubectl -n $NS rollout status deployment/api --timeout=120s
+          kubectl -n $NS exec -i deploy/worker -- python - check < infra/k8s/smoke_test.py
+
+      - name: Show the cluster if something failed
+        if: failure()
+        run: |
+          kubectl -n $NS get all,pvc,events --sort-by=.metadata.creationTimestamp || true
+          kubectl -n $NS describe pods || true
+          for d in api worker; do kubectl -n $NS logs deploy/$d --all-containers --tail=100 || true; done
+          kubectl -n $NS logs job/migrate --tail=100 || true

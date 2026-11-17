@@ -1,0 +1,36 @@
+# Kustomize: plain Kubernetes YAML plus small per-environment changes
+# ("overlays"), built into kubectl. No templating language to learn.
+#
+#   kubectl kustomize infra/k8s/overlays/local    # print the final YAML
+#   infra/k8s/deploy.sh                            # apply it, in the right order
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: quickserve
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: quickserve
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - config.yaml
+  - postgres.yaml
+  - redis.yaml
+  - migrate-job.yaml
+  - api.yaml
+  - worker.yaml
+
+# Local-only credentials, the same ones as docker-compose.yml. Kustomize adds a
+# hash to the Secret's name, so changing a value creates a new Secret and the
+# pods that use it restart automatically.
+# On a real cluster these come from a secrets manager instead (never from Git).
+secretGenerator:
+  - name: app-secrets
+    literals:
+      - POSTGRES_PASSWORD=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@postgres:5432/quickserve
+
+# The manifests say `image: quickserve`. Each overlay decides which real image
+# and tag that means (ghcr.io on your Mac, a locally built one in CI).
