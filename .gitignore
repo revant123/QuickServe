@@ -226,3 +226,19 @@ __marimo__/
 .idea/
 .vscode/
 *.log
+
+# Terraform (Phase 6)
+# Provider downloads and local state never go in Git. State holds secrets and
+# lives in the encrypted S3 bucket; .terraform.lock.hcl DOES go in Git.
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!*.tfvars.example
+*.tfplan
+backend.hcl
+
+# Modules are not run on their own (except by `terraform test`), so only the
+# root stacks (bootstrap, envs/*) commit a provider lock file.
+infra/modules/**/.terraform.lock.hcl
