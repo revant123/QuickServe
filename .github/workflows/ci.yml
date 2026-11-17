@@ -65,3 +65,74 @@ jobs:
 
       - name: Tests
         run: pytest -q
+
+  # Phase 5: build the Docker image and run the WHOLE stack exactly as
+  # `docker compose --profile app up` does on your Mac, then poke it.
+  # Runs in parallel with `test`, so the pipeline doesn't get slower.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runtime lock matches the tested lock
+        # The image installs requirements.lock; the tests ran on requirements-dev.lock.
+        # Every runtime pin must appear, at the same version, in the dev lock.
+        run: |
+          status=0
+          for pin in $(grep -v '^#' requirements.lock); do
+            grep -qxF "$pin" requirements-dev.lock || { echo "::error::$pin is not in requirements-dev.lock"; status=1; }
+          done
+          exit $status
+
+      - name: Build the image and start database, Redis, migrations, API and worker
+        run: docker compose --profile app up -d --build
+
+      - name: Wait until the API is ready
+        run: |
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:8001/health/ready && exit 0
+            sleep 2
+          done
+          echo "::error::API never became ready"
+          exit 1
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          # Seed demo data using the same image (a one-off command in the running container)
+          docker compose --profile app exec -T api python -m scripts.seed
+
+          # Log in as the demo customer and call a protected endpoint
+          TOKEN=$(curl -fsS -X POST http://localhost:8001/api/v1/auth/login \
+            -d username=customer@quickserve.dev -d password=customer-pass-123 \
+            | python3 -c 'import sys, json; print(json.load(sys.stdin)["access_token"])')
+          curl -fsS http://localhost:8001/api/v1/users/me -H "Authorization: Bearer $TOKEN"
+          echo
+
+          # The container runs as the unprivileged "app" user, not root
+          test "$(docker compose --profile app exec -T api whoami)" = "app"
+
+          # The worker started and the migration job finished successfully
+          docker compose --profile app logs worker | grep -q "worker started"
+          test "$(docker inspect -f '{{.State.ExitCode}}' "$(docker compose --profile app ps -aq migrate)")" = "0"
+
+      - name: Worker stops cleanly on SIGTERM
+        run: |
+          docker compose --profile app stop worker
+          docker compose --profile app logs worker | grep -q "worker stopped cleanly"
+
+      - name: Image size (FinOps)
+        # Registry storage and every deploy's download are paid per GB.
+        run: |
+          echo "### Docker image size" >> "$GITHUB_STEP_SUMMARY"
+          docker image ls --format '| {{.Repository}}:{{.Tag}} | {{.Size}} |' | grep -i api >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show container logs if something failed
+        if: failure()
+        run: docker compose --profile app logs --no-color
+
+      - name: Clean up
+        if: always()
+        run: docker compose --profile app down -v
