@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes, Terraform, GitHub Actions. **86 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes, Terraform, Prometheus, Grafana, GitHub Actions. **101 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
 
 ---
 
@@ -29,6 +29,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
    - [Docker: the app in containers (Phase 5)](#docker-the-app-in-containers-phase-5)
    - [AWS and Terraform (Phase 6)](#aws-and-terraform-phase-6)
    - [Kubernetes (Phase 7)](#kubernetes-phase-7)
+   - [Monitoring (Phase 7b)](#monitoring-phase-7b)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -122,7 +123,7 @@ python -m app.worker                # terminal 2 (venv active): runs the order t
 |---|---|
 | http://127.0.0.1:8000/health/ready | `{"status":"ready","database":"ok","redis":"ok"}` |
 | http://127.0.0.1:8000/docs | Swagger UI with every endpoint |
-| `pytest -q` (in another terminal, venv active) | `86 passed` |
+| `pytest -q` (in another terminal, venv active) | `101 passed` |
 
 ### Step 9: Place your first order in Swagger
 
@@ -230,6 +231,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| Monitoring and alerts (Phase 7b) | [Monitoring Q&A](#monitoring-phase-7b); `app/core/metrics.py`; `infra/k8s/monitoring/` (Prometheus config, `rules.yml` + `rules_test.yml`, Grafana dashboard); worker `--healthcheck`; `tests/test_metrics.py` |
 | Kubernetes (Phase 7) | [Kubernetes Q&A](#kubernetes-phase-7); `infra/k8s/` (Kustomize base + overlays, `deploy.sh`, `smoke_test.py`); `scripts/wait_for_migrations.py`; the `kubernetes` job in CI (kind cluster, zero-downtime rollout check) |
 | AWS infrastructure as code (Phase 6) | [AWS and Terraform Q&A](#aws-and-terraform-phase-6); `infra/` with [infra/README.md](infra/README.md); 18 `terraform test` checks; the `terraform` job in CI |
 | Image published to a registry (Phase 5b) | [Registry Q&A](#q-where-does-the-image-go-after-ci-builds-it); the `publish` job in `.github/workflows/ci.yml`; `ghcr.io/revant123/quickserve` |
@@ -247,9 +249,9 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Orders | All-or-nothing placement, itemised bill, price snapshots, status machine with actor rules, cancellation rules, full timeline | Rider assignment, ETA |
 | Payments | Mock gateway, idempotency keys, one-success-per-order rule, refunds on rejection/cancellation | Real gateway, webhooks |
 | Background jobs | A separate worker (`python -m app.worker`) expires unpaid orders and auto-rejects orders the restaurant didn't accept, every 30 seconds; safe to run several (`FOR UPDATE SKIP LOCKED`); graceful shutdown | |
-| Caching and logs | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses | Metrics and dashboards (Phase 7) |
+| Caching, logs and metrics | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses; Prometheus metrics (RED + business), 6 tested alert rules, a Grafana dashboard with cost per order | Alertmanager notifications, tracing |
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
-| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), Kubernetes manifests deployed and tested on a kind cluster in every CI run (rolling update with zero failed requests), liveness/readiness checks, pinned and locked dependencies | Applying the Terraform to a real AWS account, Ingress with HTTPS, metrics and dashboards |
+| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), Kubernetes manifests deployed and tested on a kind cluster in every CI run (rolling update with zero failed requests), liveness/readiness checks, pinned and locked dependencies | Applying the Terraform to a real AWS account, Ingress with HTTPS, Alertmanager |
 
 Everything except browsing restaurants and menus needs a login. Orders belong to the logged-in customer, and who may change an order's status is decided by the login token, never by the request body. See [section 7](#7-login-tokens-and-permissions).
 
@@ -491,7 +493,7 @@ flowchart LR
         pg["Start PostgreSQL 16 and Redis 7 service containers"] --> inst["pip install -r requirements-dev.lock"]
         inst --> lint["ruff check and ruff format --check"]
         lint --> mig["alembic upgrade head and alembic check"]
-        mig --> pyt["pytest: 86 tests"]
+        mig --> pyt["pytest: 101 tests"]
     end
 
     subgraph docker["job: docker"]
@@ -520,11 +522,13 @@ flowchart LR
     push3["git push or pull request"] --> kc
 
     subgraph kubernetes["job: kubernetes (throwaway kind cluster)"]
-        kc["kubeconform: manifests match the API schema"] --> kb["build image, create kind cluster, load image"]
+        kc["kubeconform: manifests match the API schema"] --> kp["promtool: config valid, alert rules unit-tested"]
+        kp --> kb["build image, create kind cluster, load image"]
         kb --> kd["deploy.sh: postgres, redis, migrate Job, api, worker"]
         kd --> ks["seed, log in, non-root check"]
         ks --> kr["rolling restart: zero failed requests"]
         kr --> kh["delete a pod: replaced, still answering"]
+        kh --> km["Prometheus scrapes every pod, no alerts firing; Grafana dashboard loaded"]
     end
 ```
 
@@ -1494,6 +1498,138 @@ The cluster disappears when the job ends. Before any of that, `kubeconform` chec
 
 Those are the next phases in the [roadmap](#13-roadmap).
 
+### Monitoring (Phase 7b)
+
+Kubernetes now also runs **Prometheus**, which collects numbers from the app every 15 seconds and checks the alert rules, and **Grafana**, which draws them. Everything is set up from files in [`infra/k8s/monitoring/`](infra/k8s/monitoring/), so a fresh cluster has the dashboard and the alerts with nothing to click.
+
+```mermaid
+flowchart LR
+    subgraph app["QuickServe pods"]
+        api["api pods: /metrics on port 9100"]
+        worker["worker pod: /metrics on port 9101 (+ heartbeat)"]
+    end
+    prom["Prometheus: scrape every 15 s, keep 2 days, run rules.yml"] -->|"finds pods via the Kubernetes API"| api
+    prom --> worker
+    prom --> rules["Recording rules: error rate, p95, orders per hour, cost per order"]
+    prom --> alerts["Alert rules: API down, errors, slow, worker failing, payments failing, login attack"]
+    grafana["Grafana: QuickServe overview dashboard"] -->|"PromQL"| prom
+    you["You"] -->|"port-forward :3005"| grafana
+```
+
+### Q: How do I see the dashboard?
+
+`infra/k8s/deploy.sh` now also starts Prometheus and Grafana. After deploying, open two more terminals:
+
+```bash
+kubectl -n quickserve port-forward service/grafana 3005:3000      # http://127.0.0.1:3005
+kubectl -n quickserve port-forward service/prometheus 9095:9090   # http://127.0.0.1:9095 (optional)
+```
+
+Grafana opens straight on the **QuickServe overview** dashboard, and you can view it without logging in. To edit, log in as `admin` / `quickserve-admin` (a local-only password, like the database's). The numbers move once there is traffic: place and pay for a few orders in Swagger (port 8003), log in with a wrong password a few times, and watch the panels change within a minute. In Prometheus, **Alerts** shows every rule and whether it's firing, and **Status → Targets** shows the pods it scrapes.
+
+### Q: We already have logs. What do metrics add?
+
+A **log line** tells the story of one request: who, what, how long, which error. A **metric** is a number added up across all requests, such as "requests per second" or "orders in the last hour", and it's cheap to keep every 15 seconds for days. You look at metrics to notice that something is wrong ("errors jumped to 8% at 14:02"), then at logs to find out why (search for `"level": "ERROR"` around 14:02, then follow one `request_id`). Alerts are built on metrics, because "more than 5% of requests failed for 5 minutes" is a question about numbers.
+
+### Q: What does QuickServe measure, and why those?
+
+Google's SRE book names four **golden signals** for any user-facing system: latency, traffic, errors and saturation [55]. For request-driven services they're often shortened to **RED** (Rate, Errors, Duration). QuickServe measures those, plus the business numbers that Zomato or Swiggy would watch on a big screen.
+
+| Metric | Type | Labels | The question it answers |
+|---|---|---|---|
+| `quickserve_http_requests_total` | counter | method, route, status | How busy are we (rate)? How many fail (errors)? |
+| `quickserve_http_request_duration_seconds` | histogram | method, route | How slow are the slowest 5% (duration, p95)? |
+| `quickserve_orders_placed_total` | counter | none | Orders per hour |
+| `quickserve_order_value_rupees` | histogram | none | Average order value (AOV) |
+| `quickserve_order_status_changes_total` | counter | to_status, actor | How many orders end delivered, cancelled, rejected or unpaid, and who caused it |
+| `quickserve_payments_total` | counter | outcome | Payment success rate |
+| `quickserve_menu_cache_requests_total` | counter | result (hit, miss, bypass) | Is the Redis cache earning its keep? |
+| `quickserve_logins_total` | counter | outcome (success, failed, blocked) | Is someone guessing passwords? |
+| `quickserve_worker_last_run_timestamp_seconds` | gauge | none | Is the worker loop alive? (its liveness probe) |
+| `quickserve_worker_last_success_timestamp_seconds` | gauge | none | Is the timeout job actually succeeding? |
+| `quickserve_worker_orders_timed_out_total` | counter | reason | How many orders expire unpaid or are auto-rejected |
+| `quickserve_db_pool_connections_in_use` | gauge | pod | Saturation: is the connection pool running out? |
+
+A **counter** only goes up, and Prometheus works out rates from it. A **gauge** goes up and down. A **histogram** counts values into buckets (under 10 ms, under 25 ms, and so on), which is what makes "the slowest 5%" possible.
+
+### Q: Why "the slowest 5%" (p95) and not the average response time?
+
+Averages hide pain. If 95 requests take 20 ms and 5 take 3 seconds, the average is 169 ms, which looks fine, but one customer in twenty waits 3 seconds. The **95th percentile** (p95) says "95% of requests were faster than this", so it shows exactly those 5 slow ones. The `QuickServeSlowResponses` alert watches p95, not the average.
+
+### Q: Why is `/metrics` on a separate port and not on the API?
+
+Orders per hour and payment success rate are business data, and competitors would love them. The API's public port (8000, behind the `api` Service) doesn't serve `/metrics` at all, and a test checks that it answers 404. The numbers are on port 9100 (API) and 9101 (worker). Those ports are declared on the pod but **not** in the Service, so only Prometheus, from inside the cluster, can reach them.
+
+### Q: Why is the label `/api/v1/orders/{order_id}` and not the real URL?
+
+Every distinct combination of label values is a separate **time series** that Prometheus stores and indexes. Labelled with the real path, each order ID would create a new series: a million orders, a million series, and Prometheus runs out of memory. The Prometheus docs say not to use labels for unbounded values such as user IDs [56]. So the middleware labels each request with the **route template** FastAPI matched, and every URL that matched no route (bots scanning for `/wp-admin`) shares a single `unmatched` label. Tests check both.
+
+It's also a FinOps rule. Managed Prometheus services bill per sample ingested: AWS charges USD 0.90 per 10 million samples for the first 2 billion [57]. Their own pricing example, 10 nodes with 1,000 metrics each scraped every 30 seconds, comes to about USD 81 a month for ingestion alone [58]. Each label you add multiplies the number of series, and with it the bill.
+
+### Q: How do you stop a failed order from being counted?
+
+This one is an ORM lesson. The status-change code runs **inside** a database transaction. If the counter went up right there and the transaction then rolled back (stock ran out on the third item, say), the dashboard would show orders that don't exist.
+
+So `after_commit(db, ...)` in `app/core/metrics.py` doesn't increment anything yet. It parks the increment on the SQLAlchemy session, and two **session events** finish the job. `after_commit` runs the parked increments once the commit has succeeded, and `after_rollback` throws them away. Tests check this both ways: an out-of-stock order and a refused cancellation leave the counters untouched.
+
+### Q: How is "cost per order" calculated?
+
+It's the FinOps **unit metric** from [section 10](#10-finops-thinking-in-cost-per-order), now live on the dashboard. Two recording rules in `rules.yml` compute it:
+
+```
+quickserve:infra_cost_usd:per_hour = 0.04          # the Phase 6 AWS estimate
+quickserve:cost_per_order_usd:1h   = cost per hour / orders placed in the last hour
+```
+
+With 240 orders an hour, an order costs USD 0.000167 in infrastructure. With 24 an hour, it costs ten times more, on the same machines. That's why FinOps tracks cost **per order** and not just the monthly bill: a growing bill can be healthy if cost per order falls. The hourly cost is a constant for now. On a real cluster it would come from a cost tool such as **OpenCost**, a CNCF project that splits Kubernetes costs by namespace, workload or pod and exports them to Prometheus [59]. That's Phase 8.
+
+### Q: Which alerts are there, and how do you know they work?
+
+| Alert | Fires when | Severity |
+|---|---|---|
+| `QuickServeAPIDown` | Prometheus can't reach any API pod for 2 minutes | critical |
+| `QuickServeHighErrorRate` | More than 5% of requests fail with a 5xx for 5 minutes | critical |
+| `QuickServeSlowResponses` | p95 latency above 500 ms for 10 minutes | warning |
+| `QuickServeWorkerFailing` | The timeout job hasn't succeeded for 5 minutes | critical |
+| `QuickServePaymentsFailing` | Under 80% of payments succeed, with at least 20 attempts in the hour | critical |
+| `QuickServeLoginAttack` | More than 10 blocked logins a minute for 5 minutes | warning |
+
+The `for:` part of each rule means one bad scrape doesn't wake anyone at 3 a.m. The payments alert also needs at least 20 attempts, so two failures in a quiet hour don't count as "50% failing".
+
+An alert rule that never fires looks exactly like a healthy system, so the rules have **unit tests**. `rules_test.yml` feeds `promtool test rules` [60] made-up metric history, such as "10 of every 70 requests fail" or "the worker's last success never moves", and checks which alerts fire, when, and with what message. Each alert is also tested in a healthy case where it must stay quiet. CI runs these tests and `promtool check config` on every pull request.
+
+What's missing is **Alertmanager**, which turns a firing alert into a Slack message, an email or a phone call. For now, alerts are visible on Prometheus's **Alerts** page.
+
+### Q: How does the worker's heartbeat work?
+
+Every pass of the worker loop, successful or not, updates `quickserve_worker_last_run_timestamp_seconds`. Its Kubernetes **liveness probe** runs `python -m app.worker --healthcheck`, which reads that number from port 9101 and fails if no pass finished in the last 2 minutes. A stuck loop therefore gets the pod restarted.
+
+A pass that **fails**, because PostgreSQL is down for example, still counts as a beat. That's the Phase 7 lesson again: restarting the worker can't fix the database. That case raises the `QuickServeWorkerFailing` alert instead, so a person looks. Four tests cover the healthcheck: fresh, stuck, failing but alive, and not running at all. CI also checks that the worker was never restarted.
+
+### Q: What does monitoring cost, and what keeps it cheap?
+
+| Choice | Why |
+|---|---|
+| Scrape every 15 s, not every 1 s | 15 times fewer samples to store, and still spots a problem within a minute |
+| Keep 2 days, at most 1 GB | Enough to compare today with yesterday; disk can't fill up |
+| Few labels, all with a fixed set of values | The number of series stays small and predictable |
+| Recording rules for every dashboard number | Each panel reads one ready-made series instead of crunching raw data on every refresh |
+| Requests and limits on Prometheus and Grafana | Monitoring can't starve the app it watches |
+
+The trade-off is that metrics live on the pod's own disk (`emptyDir`) and vanish if Prometheus restarts. That's fine for learning; a real setup gives Prometheus a persistent disk or sends the data to a managed service.
+
+### Q: What does CI check for monitoring?
+
+1. `promtool check config` and `promtool test rules` (the alert unit tests above).
+2. On the kind cluster, after the smoke test, a script in the cluster asks Prometheus:
+   - Is every API and worker pod being scraped?
+   - Was the login from the smoke test counted?
+   - Is the worker heartbeat fresh?
+   - Do the recording rules produce numbers?
+   - Is any alert firing? (None may be.)
+3. It asks Grafana whether the QuickServe dashboard loaded with all 20 panels.
+4. It checks that the worker's liveness probe never restarted it.
+
 ---
 
 ## 9. DevOps already in the project
@@ -1516,7 +1652,7 @@ PostgreSQL 16 and Redis 7 always, the same major versions as CI and, later, AWS.
 | `ruff check` and `ruff format --check` | Style arguments end; obvious bugs (unused imports, shadowed names) caught before review |
 | `alembic upgrade head` + `alembic check` | **Fails if someone changed a model but forgot to create a migration**, a very common production incident |
 | PostgreSQL 16 and Redis 7 **service containers** | Tests run against the same database and cache as production |
-| `pytest` | All 86 tests, including the concurrency, login-attack and Redis-outage tests |
+| `pytest` | All 101 tests, including the concurrency, login-attack and Redis-outage tests |
 | `concurrency: cancel-in-progress` | Two quick pushes cancel the older run instead of paying for both |
 | `timeout-minutes: 10` | A hung job can't burn CI minutes forever |
 | A second job, `docker`, in parallel | Builds the image and smoke-tests the whole stack in containers ([details](#q-what-does-the-ci-docker-job-prove-that-the-tests-dont)) |
@@ -1636,6 +1772,8 @@ Explaining the cycle data this way shows you understand FinOps as a way of think
 | Autoscaler between 2 and 5 API pods | Pays for extra pods only under load, with a hard ceiling |
 | `ttlSecondsAfterFinished` on the migration Job, `revisionHistoryLimit: 5` | Finished Jobs and old ReplicaSets don't pile up |
 | minikube and kind for learning Kubernetes | A real cluster for USD 0; a managed control plane bills by the hour |
+| Metrics labelled by route template, no IDs; scrape every 15 s; keep 2 days / 1 GB | Managed Prometheus bills per sample [57]; fewer series, fewer samples |
+| Cost per order on the dashboard | The unit metric is visible to everyone, not hidden in a spreadsheet |
 | Limits on every container in Compose (API 1 CPU / 512 MB, worker 0.5 CPU / 256 MB) | First guesses for the Kubernetes requests and limits that decide node count in Phase 7 |
 
 ### Q: How do I avoid a surprise AWS bill?
@@ -1680,6 +1818,7 @@ quickserve/
 │   │   ├── security.py           password hashing (Argon2), JWT create/verify
 │   │   ├── redis.py              shared Redis client (short timeouts, fail fast)
 │   │   ├── logging.py            JSON logs, request IDs
+│   │   ├── metrics.py            Prometheus metrics, counted only after commit
 │   │   ├── exceptions.py         domain errors -> HTTP codes in one place
 │   │   └── money.py              Decimal rounding for bills
 │   ├── database/
@@ -1702,9 +1841,10 @@ quickserve/
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        86 tests, real PostgreSQL and Redis
+├── tests/                        101 tests, real PostgreSQL and Redis
 ├── infra/                        Terraform for AWS (Phase 6); start with infra/README.md
 │   ├── k8s/                      Kubernetes (Phase 7): base/ manifests, overlays/local and ci, deploy.sh
+│   │   └── monitoring/           Prometheus config, alert rules + their tests, Grafana dashboard (Phase 7b)
 │   ├── bootstrap/                budget alert + S3 state bucket, once per account
 │   ├── envs/dev/                 network, database, secrets, app server (+ tests/)
 │   └── modules/                  budget, network, database, app_server (each with tests/)
@@ -1762,8 +1902,8 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **5b. Image registry** (done) | CI publishes the image to GitHub Container Registry after both other jobs pass, tagged with the commit ID, for Intel and ARM | Immutable tags, least-privilege CI tokens, multi-architecture images |
 | **6. AWS and Terraform** (code done and tested; applying it is your call) | Budget alert and S3 state bucket (bootstrap), VPC with public/private subnets and no NAT, RDS PostgreSQL 16, Parameter Store secrets, one Graviton EC2 server running the ghcr.io image, Session Manager instead of SSH, 18 mock-based `terraform test` checks in CI | IAM least privilege, public vs private subnets, remote state and locking, IMDSv2, `plan`/`apply`/`destroy` |
 | **7. Kubernetes** (done) | Kustomize manifests for minikube: Deployments, StatefulSet, Services, migration Job with wait-for-migrations init containers, ConfigMap and Secret, HPA, PDB, probes wired to `/health` and `/health/ready`, locked-down pods; CI deploys to kind and checks a zero-downtime rollout and self-healing | Requests vs limits, liveness vs readiness, rolling updates, what happens when a pod dies |
-| **7b. Monitoring** (next) | Prometheus metrics endpoint, Grafana dashboards with the business signals above, alerts, Ingress with HTTPS | The four golden signals, SLOs, alert fatigue |
-| **8. FinOps and services** | Cost per order measured on EC2 vs Kubernetes, OpenCost, rightsizing; split out the notification service driven by `order_status_events` | Unit economics, event-driven design, the outbox pattern |
+| **7b. Monitoring** (done) | Prometheus metrics on a private port (RED + business + worker heartbeat), counters that move only after commit, Prometheus with recording and alert rules (unit-tested with promtool), a Grafana dashboard with cost per order, CI that checks scraping, alerts and the dashboard | The four golden signals, percentiles, cardinality, alert fatigue, unit metrics |
+| **8. FinOps and services** (next) | OpenCost feeding real cost into the cost-per-order panel, rightsizing requests from measured use, Alertmanager; split out the notification service driven by `order_status_events` | Unit economics, showback, event-driven design, the outbox pattern |
 
 ---
 
@@ -1875,3 +2015,9 @@ Business and tax figures change often; the dates show when each was reported.
 52. Kubernetes documentation, *Resource Management for Pods and Containers* (the scheduler places pods by their requests; memory limits enforced by OOM kills). https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
 53. Kubernetes documentation, *Jobs* (a Job's pod template can't be updated; delete and recreate). https://kubernetes.io/docs/concepts/workloads/controllers/job/
 54. kind documentation, *Initial design* (Kubernetes clusters whose nodes are Docker containers, aimed at testing). https://kind.sigs.k8s.io/docs/design/initial/
+55. Google, *Site Reliability Engineering*, chapter 6 "Monitoring Distributed Systems" (the four golden signals: latency, traffic, errors, saturation). https://sre.google/sre-book/monitoring-distributed-systems/
+56. Prometheus documentation, *Metric and label naming* (don't use labels for high-cardinality values such as user IDs). https://prometheus.io/docs/practices/naming/
+57. AWS, *Price reduction for Amazon Managed Service for Prometheus* (USD 0.90 per 10M samples ingested for the first 2 billion). https://aws.amazon.com/about-aws/whats-new/2021/05/aws-announces-a-price-reduction-for-amazon-managed-service-for-prometheus-amp
+58. AWS, *Amazon Managed Service for Prometheus pricing* (example: 10 nodes, 1,000 metrics each, every 30 s, ingestion about USD 80.93 a month). https://aws.amazon.com/prometheus/pricing/
+59. OpenCost (CNCF project): real-time Kubernetes cost allocation, exported to Prometheus. https://opencost.io/
+60. Prometheus documentation, *Unit testing for rules* (`promtool test rules`). https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/
