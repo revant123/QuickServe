@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.client_ip import client_ip
 from app.core.config import get_settings
 from app.core.security import TokenClaims
 from app.database.session import get_db
@@ -28,8 +29,7 @@ def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Ses
     After 5 wrong passwords for one email (20 from one IP) in 15 minutes,
     login answers 429 Too Many Requests until the window ends.
     """
-    client_ip = request.client.host if request.client else "unknown"
-    token = service.login(db, form.username, form.password, client_ip)
+    token = service.login(db, form.username, form.password, client_ip(request))
     return TokenOut(access_token=token, expires_in_minutes=get_settings().access_token_expire_minutes)
 
 

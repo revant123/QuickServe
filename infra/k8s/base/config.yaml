@@ -10,9 +10,8 @@ data:
   # "redis" is the name of the Redis Service: Kubernetes DNS turns it into an address.
   REDIS_URL: redis://redis:6379/0
   # Phase 9: requests now arrive through the gateway (Envoy), so the TCP peer
-  # the API sees is the Envoy pod, not the customer. Envoy adds the real client
-  # address to X-Forwarded-For; uvicorn uses it ONLY when the request comes
-  # from one of these addresses (the pod network of minikube and kind).
-  # Never "*": then uvicorn believes the left-most entry, which the client
-  # can write themselves, and anyone could pretend to be any IP.
-  FORWARDED_ALLOW_IPS: "10.244.0.0/16"
+  # the API sees is the Envoy pod, not the customer. Envoy appends the address
+  # it saw to X-Forwarded-For; the API believes that LAST entry, and only when
+  # the request comes from this network (the pod network of minikube and kind,
+  # where Envoy runs). See app/core/client_ip.py for why only the last entry.
+  TRUSTED_PROXY_CIDRS: "10.244.0.0/16"

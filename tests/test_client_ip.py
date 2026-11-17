@@ -1,52 +1,65 @@
 """Behind the gateway (Phase 9): which client IP does the API see?
 
-Every request reaches the API from the Envoy pod, so `request.client.host` would
-be Envoy's IP for every customer, and the "20 failed logins per IP" rule would
-lock EVERYONE out after 20 failures from anyone. Envoy appends the real client
-address to X-Forwarded-For; uvicorn's ProxyHeadersMiddleware reads it, but only
-for requests from a trusted proxy (FORWARDED_ALLOW_IPS). These tests pin down
-exactly what it trusts, because getting this wrong is a security bug.
+See app/core/client_ip.py. Getting this wrong is a security bug either way:
+trust nothing and every customer shares Envoy's IP (one attacker locks everyone
+out of login); trust too much and anyone can claim any IP.
 """
 
 import asyncio
 
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-POD_NETWORK = "10.244.0.0/16"  # FORWARDED_ALLOW_IPS in infra/k8s/base/config.yaml
-ENVOY_POD = "10.244.0.17"
+from app.core.client_ip import from_proxy
+
+POD_NETWORK = "10.244.0.0/16"  # TRUSTED_PROXY_CIDRS in infra/k8s/base/config.yaml
+ENVOY = "10.244.0.17"
 
 
-def seen_by_app(peer, xff=None, trusted=POD_NETWORK):
-    """Run one request through uvicorn's middleware; return (client ip, scheme) the app sees."""
+def test_no_proxy_configured_means_the_tcp_peer_is_the_client():
+    assert from_proxy("203.0.113.9", "6.6.6.6", trusted_cidrs="") == "203.0.113.9"
+
+
+def test_through_the_gateway_the_api_sees_the_real_client():
+    # Envoy appended the address it saw.
+    assert from_proxy(ENVOY, "203.0.113.9", POD_NETWORK) == "203.0.113.9"
+
+
+def test_a_forged_x_forwarded_for_is_ignored():
+    # The client sent "X-Forwarded-For: 6.6.6.6"; Envoy appended the real address.
+    assert from_proxy(ENVOY, "6.6.6.6, 203.0.113.9", POD_NETWORK) == "203.0.113.9"
+
+
+def test_a_client_inside_the_pod_network_cant_forge_either():
+    # The case CI caught: the client (here another pod) has an address in the
+    # trusted range. We still take only the last entry, the one Envoy wrote.
+    assert from_proxy(ENVOY, "6.6.6.6, 10.244.0.42", POD_NETWORK) == "10.244.0.42"
+
+
+def test_x_forwarded_for_from_anyone_but_the_proxy_is_ignored():
+    # Someone reaching the API directly, not through Envoy.
+    assert from_proxy("198.51.100.4", "6.6.6.6", POD_NETWORK) == "198.51.100.4"
+
+
+def test_garbage_in_the_header_falls_back_to_the_peer():
+    assert from_proxy(ENVOY, "6.6.6.6, not-an-ip", POD_NETWORK) == ENVOY
+    assert from_proxy(ENVOY, None, POD_NETWORK) == ENVOY
+
+
+def _uvicorn_sees(peer, xff, trusted):
     seen = {}
 
     async def app(scope, receive, send):
-        seen["client"], seen["scheme"] = scope["client"][0], scope["scheme"]
+        seen["client"] = scope["client"][0]
 
-    headers = [(b"x-forwarded-for", xff.encode()), (b"x-forwarded-proto", b"https")] if xff else []
-    scope = {"type": "http", "client": (peer, 40000), "scheme": "http", "headers": headers}
+    scope = {"type": "http", "client": (peer, 40000), "scheme": "http", "headers": [(b"x-forwarded-for", xff.encode())]}
     asyncio.run(ProxyHeadersMiddleware(app, trusted_hosts=trusted)(scope, None, None))
-    return seen["client"], seen["scheme"]
+    return seen["client"]
 
 
-def test_through_the_gateway_the_app_sees_the_real_client():
-    # Envoy appended the address it saw (the customer) to the header.
-    assert seen_by_app(ENVOY_POD, xff="203.0.113.9") == ("203.0.113.9", "https")
-
-
-def test_a_client_cannot_pretend_to_be_someone_else():
-    # The attacker sends "X-Forwarded-For: 6.6.6.6"; Envoy appends their real
-    # address. uvicorn reads from the RIGHT and stops at the first address that
-    # isn't a trusted proxy, so the forged left part is ignored.
-    assert seen_by_app(ENVOY_POD, xff="6.6.6.6, 203.0.113.9")[0] == "203.0.113.9"
-
-
-def test_the_header_is_ignored_when_it_doesnt_come_from_a_trusted_proxy():
-    # Someone reaching the API directly (not through Envoy) can't set their IP.
-    assert seen_by_app("198.51.100.4", xff="6.6.6.6") == ("198.51.100.4", "http")
-
-
-def test_trusting_everyone_is_the_classic_mistake():
-    # FORWARDED_ALLOW_IPS="*" makes uvicorn believe the LEFT-most entry, which
-    # the client wrote. This is why the config names the pod network instead.
-    assert seen_by_app(ENVOY_POD, xff="6.6.6.6, 203.0.113.9", trusted="*")[0] == "6.6.6.6"
+def test_why_not_uvicorns_forwarded_allow_ips():
+    # uvicorn skips EVERY trusted address from the right. A client inside the
+    # trusted range is skipped too, and the forged entry wins. This is the bug
+    # the first version of Phase 9 had; CI's gateway check found it.
+    assert _uvicorn_sees(ENVOY, "6.6.6.6, 10.244.0.42", POD_NETWORK) == "6.6.6.6"
+    # And "*" (trust everyone) believes the left-most entry: always forgeable.
+    assert _uvicorn_sees(ENVOY, "6.6.6.6, 203.0.113.9", "*") == "6.6.6.6"

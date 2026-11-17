@@ -60,19 +60,25 @@ code=$(c unknown.localhost "$HTTPS" -k -o /dev/null -w '%{http_code}' "https://u
 echo "   ok: 404"
 
 echo "5. The API sees the real client IP, and a forged X-Forwarded-For is ignored"
+# From inside the cluster (the worker pod) to the gateway's Service, claiming
+# to be 6.6.6.6. The API must log the worker pod's real address instead.
 rid="gwcheck-$RANDOM$RANDOM"
-c "$HOST" "$HTTPS" -o /dev/null -H "X-Request-ID: $rid" -H "X-Forwarded-For: 6.6.6.6" "https://$HOST:$HTTPS/health"
+kubectl -n "$NS" exec deploy/worker -- python -c "
+import ssl, urllib.request
+ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+req = urllib.request.Request('https://quickserve-gateway.envoy-gateway-system/health',
+    headers={'Host': '$HOST', 'X-Request-ID': '$rid', 'X-Forwarded-For': '6.6.6.6'})
+assert urllib.request.urlopen(req, context=ctx, timeout=5).status == 200"
+worker_ip=$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=worker -o jsonpath='{.items[0].status.podIP}')
 line=
 for _ in $(seq 1 10); do
-  line=$(kubectl -n "$NS" logs -l app.kubernetes.io/name=api --tail=500 --prefix=false | grep "$rid" || true)
+  line=$(kubectl -n "$NS" logs -l app.kubernetes.io/name=api -c api --tail=500 | grep "$rid" || true)
   [[ -n "$line" ]] && break
   sleep 1
 done
 echo "   API log line: $line"
-# Through a port-forward, Envoy's client is 127.0.0.1. Not 6.6.6.6 (forged)
-# and not Envoy's own pod IP (10.244.x.x).
-grep -q '"client_ip": "127.0.0.1"' <<<"$line"
-echo "   ok: same request ID in the API's log, client_ip is the real client"
+grep -q "\"client_ip\": \"$worker_ip\"" <<<"$line" || { echo "   expected client_ip $worker_ip (the worker pod)"; exit 1; }
+echo "   ok: same request ID in the API's log; client_ip is the worker pod ($worker_ip), not 6.6.6.6"
 
 echo "6. The edge rate limit on /api/v1/auth/login (60 a minute)"
 # GET, not POST: the API answers 405 at once, with no password hashing and no
