@@ -1,21 +1,18 @@
-from pwdlib import PasswordHash
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import Conflict
-from app.modules.users.model import User
+from app.core.security import hash_password
+from app.modules.users.model import Role, User
 from app.modules.users.schema import UserCreate
-
-# Argon2, the algorithm FastAPI's security tutorial recommends via pwdlib.
-password_hash = PasswordHash.recommended()
 
 
 def register(db: Session, data: UserCreate) -> User:
     user = User(
         name=data.name,
         email=data.email.lower(),
-        role=data.role,
-        password_hash=password_hash.hash(data.password),
+        role=Role(data.role),
+        password_hash=hash_password(data.password),
     )
     db.add(user)
     try:

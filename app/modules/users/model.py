@@ -9,7 +9,8 @@ from app.database.base import Base, Timestamps, UUIDPrimaryKey
 class Role(str, enum.Enum):
     CUSTOMER = "CUSTOMER"
     RESTAURANT_OWNER = "RESTAURANT_OWNER"
-    ADMIN = "ADMIN"
+    RIDER = "RIDER"  # delivery partner
+    ADMIN = "ADMIN"  # support / operations staff
 
 
 class User(UUIDPrimaryKey, Timestamps, Base):

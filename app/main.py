@@ -14,14 +14,16 @@ settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
     description="Food ordering and delivery platform: a learning project for backend, DevOps and FinOps.",
-    version="0.2.0",
+    version="0.3.0",
 )
 app.include_router(api_router)
 
 
 @app.exception_handler(DomainError)
 def domain_error_handler(_: Request, exc: DomainError):
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+    # The HTTP standard says a 401 should tell the client how to authenticate.
+    headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message}, headers=headers)
 
 
 @app.get("/", tags=["health"])

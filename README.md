@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Alembic, pytest, GitHub Actions. **40 tests**, all run against a real PostgreSQL, including concurrency tests with real threads.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Alembic, pytest, GitHub Actions. **59 tests**, all run against a real PostgreSQL, including concurrency tests with real threads and attacks on the login system.
 
 ---
 
@@ -24,13 +24,14 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
 4. [The inventory design: stock, consumed and cycles](#4-the-inventory-design-stock-consumed-and-cycles)
 5. [ORM vs writing SQL by hand](#5-orm-vs-writing-sql-by-hand)
 6. [Business rules borrowed from Zomato and Swiggy](#6-business-rules-borrowed-from-zomato-and-swiggy)
-7. [DevOps already in the project](#7-devops-already-in-the-project)
-8. [FinOps: thinking in cost per order](#8-finops-thinking-in-cost-per-order)
-9. [Bugs the tests caught while building this](#9-bugs-the-tests-caught-while-building-this)
-10. [Project structure and API](#10-project-structure-and-api)
-11. [Roadmap](#11-roadmap)
-12. [Interview cheat sheet](#12-interview-cheat-sheet)
-13. [References](#13-references)
+7. [Login, tokens and permissions](#7-login-tokens-and-permissions)
+8. [DevOps already in the project](#8-devops-already-in-the-project)
+9. [FinOps: thinking in cost per order](#9-finops-thinking-in-cost-per-order)
+10. [Bugs the tests caught while building this](#10-bugs-the-tests-caught-while-building-this)
+11. [Project structure and API](#11-project-structure-and-api)
+12. [Roadmap](#12-roadmap)
+13. [Interview cheat sheet](#13-interview-cheat-sheet)
+14. [References](#14-references)
 
 ---
 
@@ -97,7 +98,7 @@ alembic upgrade head
 python -m scripts.seed
 ```
 
-This prints a `customer_id`, two `restaurant_id`s and every `menu_item_id`. Keep them; you'll paste them into Swagger.
+This creates two restaurants with menus and four demo accounts (customer, restaurant owner, rider, admin), and prints their emails and passwords.
 
 ### Step 7: Start the API
 
@@ -111,20 +112,37 @@ uvicorn app.main:app --reload
 |---|---|
 | http://127.0.0.1:8000/health/ready | `{"status":"ready","database":"ok"}` |
 | http://127.0.0.1:8000/docs | Swagger UI with every endpoint |
-| `pytest -q` (in a second terminal, venv active) | `40 passed` |
+| `pytest -q` (in a second terminal, venv active) | `59 passed` |
 
 ### Step 9: Place your first order in Swagger
 
-Use the IDs that `seed` printed:
+In Swagger, every step works the same way: click the endpoint, click **Try it out**, fill in the fields, click **Execute**.
 
-1. `GET /api/v1/restaurants/{restaurant_id}/menu`: the customer menu with `orderable` and badges.
-2. `POST /api/v1/orders` with your `customer_id`, `restaurant_id` and an item. The response has the itemised bill.
-3. `POST /api/v1/orders/{order_id}/payments` with header `Idempotency-Key: my-first-payment`. Send it again with the same key: you get `200` and `Idempotent-Replayed: true`, not a second charge.
-4. `PATCH /api/v1/orders/{order_id}/status` with `{"status": "ACCEPTED", "actor": "restaurant"}`.
-5. `GET /api/v1/orders/{order_id}/timeline`: every status change, who made it and when.
-6. `POST /api/v1/menu/{menu_item_id}/restock` with `{"quantity": 40}`. The response shows the archived cycle and `consumed` reset to 0.
-7. `GET /api/v1/restaurants/{restaurant_id}/best-sellers`.
-8. `GET /api/v1/menu/{menu_item_id}/restock-suggestion`.
+**As the customer:**
+
+1. Click **Authorize** (top right). Username `customer@quickserve.dev`, password `customer-pass-123`. Click **Authorize**, then **Close**.
+2. `GET /api/v1/restaurants`: copy the `id` of Pal Dhaba.
+3. `GET /api/v1/restaurants/{restaurant_id}/menu`: copy the `id` of a dish.
+4. `POST /api/v1/orders`. No customer id needed: the order belongs to whoever is logged in.
+   ```json
+   {
+     "restaurant_id": "PASTE_RESTAURANT_ID",
+     "delivery_address": "House 5, Sector 15, Chandigarh",
+     "items": [{"menu_item_id": "PASTE_MENU_ITEM_ID", "quantity": 2}]
+   }
+   ```
+   The response has the itemised bill. Copy the order `id`.
+5. `POST /api/v1/orders/{order_id}/payments` with `Idempotency-Key: my-first-payment`. Execute it twice: the second time you get `200` and `idempotent-replayed: true`, not a second charge.
+
+**As the restaurant owner:**
+
+6. Click **Authorize**, then **Logout**, and log in as `owner@quickserve.dev` / `owner-pass-123`.
+7. `PATCH /api/v1/orders/{order_id}/status` with `{"status": "ACCEPTED"}`. There's no "actor" field: the server knows you're the owner from your token.
+8. `GET /api/v1/orders/{order_id}/timeline`: every status change, who made it and when.
+9. `POST /api/v1/menu/{menu_item_id}/restock` with `{"quantity": 40}`. The response shows the archived cycle and `consumed` reset to 0.
+10. `GET /api/v1/restaurants/{restaurant_id}/best-sellers` and `GET /api/v1/menu/{menu_item_id}/restock-suggestion`.
+
+**See the permissions work:** log out and try `POST /api/v1/orders` (you get `401`), or log in as the customer and try the restock (you get `403`). [Section 7](#7-login-tokens-and-permissions) explains every rule.
 
 ### Other useful commands
 
@@ -158,19 +176,20 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Requirement | Where it lives |
 |---|---|
 | Focus on how the ORM compares with writing SQL by hand | [Section 5](#5-orm-vs-writing-sql-by-hand); `app/modules/menu/analytics.py` (same report in ORM and raw SQL, tested equal); `scripts/show_sql.py`; `scripts/race_demo.py`; `tests/test_orm_behaviour.py` |
-| DevOps and FinOps as the top priority | [Section 7](#7-devops-already-in-the-project) and [Section 8](#8-finops-thinking-in-cost-per-order); `.github/workflows/ci.yml`; `docker-compose.yml`; health checks; connection pool settings; lock file |
+| DevOps and FinOps as the top priority | [Section 8](#8-devops-already-in-the-project) and [Section 9](#9-finops-thinking-in-cost-per-order); `.github/workflows/ci.yml`; `docker-compose.yml`; health checks; connection pool settings; lock file |
 | Real business logic from Zomato / Swiggy | [Section 6](#6-business-rules-borrowed-from-zomato-and-swiggy): accept timeout, out-of-stock-until, itemised bill with platform fee and GST, cancellation rules, idempotent payments |
 | Stock + consumer logic instead of QuickKart's `stock - 1` | [Section 4](#4-the-inventory-design-stock-consumed-and-cycles); `app/modules/menu/model.py` |
 | Restock resets the consumer counter to zero | `restock()` in `app/modules/menu/service.py`, which archives the cycle first so no data is lost |
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
+| Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
 | Everything in the README, as natural questions and answers | This file |
 
 **What's built so far, and what isn't:**
 
 | Area | Done | Not yet |
 |---|---|---|
-| Users | Registration with Argon2 password hashing via pwdlib, as FastAPI's docs now recommend [4] (passlib stopped working on Python 3.13 [23]); unique emails enforced by the database | Login, JWT tokens, role checks (next task) |
+| Users and login | Registration, login with JWT access tokens, four roles (customer, restaurant owner, rider, admin), ownership checks on every restaurant and order, Argon2 password hashing via pwdlib as FastAPI's docs recommend [4] (passlib stopped working on Python 3.13 [23]) | Refresh tokens, logout, login rate limiting |
 | Restaurants | Create, list with pagination, packaging charge | Opening hours, delivery radius |
 | Menu and stock | Stock/consumed counters, stock cycles with archive, restock with or without carry-over, "out of stock until" timer, customer badges ("Only 3 left", "Selling fast") | Add-ons and variants (half/full plate) |
 | Orders | All-or-nothing placement, itemised bill, price snapshots, status machine with actor rules, cancellation rules, full timeline | Rider assignment, ETA |
@@ -179,7 +198,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
 | DevOps | Alembic migrations (tested up and down), PostgreSQL in Docker Compose, CI pipeline, liveness/readiness checks, pinned and locked dependencies | Dockerfile for the app, AWS, Terraform, Kubernetes |
 
-Auth isn't built yet, so for now order requests carry a `customer_id` and status changes carry an `actor`. The admin job endpoint is unprotected. Both get fixed in the next task.
+Everything except browsing restaurants and menus needs a login. Orders belong to the logged-in customer, and who may change an order's status is decided by the login token, never by the request body. See [section 7](#7-login-tokens-and-permissions).
 
 ---
 
@@ -195,17 +214,20 @@ flowchart TB
 
     subgraph app["QuickServe API: one FastAPI process"]
         router["api/router.py, mounted at /api/v1"]
+        authdep["auth: login, JWT check, current user"]
         subgraph modules["app/modules"]
-            users["users: registration, password hashing"]
+            users["users: registration, profile"]
             rest["restaurants: create, list"]
             menu["menu: stock, cycles, availability, analytics"]
             orders["orders: placement, bill, state machine, timeout job"]
             pay["payments: mock gateway, idempotency, refunds"]
         end
-        core["core: config, exceptions, money"]
+        core["core: config, security, exceptions, money"]
         dbl["database: engine, connection pool, sessions"]
     end
 
+    router -->|"every protected request"| authdep
+    authdep --> users
     router --> users
     router --> rest
     router --> menu
@@ -343,8 +365,9 @@ sequenceDiagram
     participant OS as orders.service
     participant DB as PostgreSQL
 
-    C->>API: POST /api/v1/orders
-    API->>OS: place_order()
+    C->>API: POST /api/v1/orders with Authorization: Bearer token
+    API->>API: check the token, load the customer
+    API->>OS: place_order(customer)
     OS->>DB: BEGIN
     loop each dish, in sorted id order (no deadlocks)
         OS->>DB: conditional UPDATE: consumed + qty, only if it stays within stock
@@ -407,7 +430,7 @@ flowchart LR
     pg --> inst["pip install -r requirements-dev.lock"]
     inst --> lint["ruff check and ruff format --check"]
     lint --> mig["alembic upgrade head and alembic check"]
-    mig --> test["pytest: 40 tests"]
+    mig --> test["pytest: 59 tests"]
     test --> ok{"all green?"}
     ok -->|yes| merge["safe to merge"]
     ok -->|no| fix["fix before merging"]
@@ -445,7 +468,7 @@ flowchart TB
     prom -.->|"scrape metrics"| app2
 ```
 
-Only PostgreSQL is in Docker today; everything in this last diagram is the plan for the phases in the [roadmap](#11-roadmap).
+Only PostgreSQL is in Docker today; everything in this last diagram is the plan for the phases in the [roadmap](#12-roadmap).
 
 ---
 
@@ -634,7 +657,7 @@ Both look almost identical in Python. The first loses updates under concurrency;
 Three things, all demonstrated in `tests/test_orm_behaviour.py`:
 
 1. **Hidden queries (N+1).** Default lazy loading turns a loop over 50 restaurants into 51 queries. We set `lazy="raise"` so that mistake fails in development.
-2. **The identity map can serve stale data.** Within one session, each row is one Python object. If you hold an object and the row changes underneath you (another request, a script), **selecting it again returns the same object with the old values**. SQLAlchemy doesn't overwrite already-loaded objects unless you ask with `populate_existing`, `refresh()` or `expire()` [2]. This is especially dangerous with `SELECT ... FOR UPDATE`: you lock the row but read stale values, a known pitfall [3]. Every locking query in QuickServe uses `populate_existing=True` for this reason. (One of our own tests once passed by accident because of this; see section 9.)
+2. **The identity map can serve stale data.** Within one session, each row is one Python object. If you hold an object and the row changes underneath you (another request, a script), **selecting it again returns the same object with the old values**. SQLAlchemy doesn't overwrite already-loaded objects unless you ask with `populate_existing`, `refresh()` or `expire()` [2]. This is especially dangerous with `SELECT ... FOR UPDATE`: you lock the row but read stale values, a known pitfall [3]. Every locking query in QuickServe uses `populate_existing=True` for this reason. (One of our own tests once passed by accident because of this; see section 10.)
 3. **Autogenerate is a draft, not the truth.** Alembic's generated migration created PostgreSQL ENUM types in `upgrade()` but didn't drop them in `downgrade()`, so downgrade-then-upgrade failed with "type already exists". The fix was added by hand, and the test suite now runs downgrade and upgrade on every run. Always read a generated migration before committing it.
 
 ### Q: How do I see the SQL the ORM generates?
@@ -714,7 +737,7 @@ Failed ending before PREPARING  -> stock released, payment refunded if one was t
 Failed ending from PREPARING    -> stock counted as waste, payment refunded
 ```
 
-Each target status also lists who may set it: only the restaurant accepts, only a rider delivers, only the system marks an order paid. `DELIVERED -> PREPARING` is impossible because `DELIVERED` allows no next state. Every change is written to `order_status_events`, which powers the timeline endpoint today and notifications later.
+Each target status also lists who may set it: only the restaurant accepts, only a rider delivers, only the system marks an order paid. Who you are comes from your login token, never from the request ([section 7](#7-login-tokens-and-permissions)). `DELIVERED -> PREPARING` is impossible because `DELIVERED` allows no next state. Every change is written to `order_status_events`, which powers the timeline endpoint today and notifications later.
 
 ### Q: The customer taps "Pay", the network drops, the app retries. Are they charged twice?
 
@@ -724,11 +747,150 @@ No. The client sends an `Idempotency-Key` header. A `UNIQUE` constraint on that 
 CREATE UNIQUE INDEX uq_payments_one_success_per_order ON payments (order_id) WHERE status = 'SUCCESS';
 ```
 
-Failed attempts are kept, and the customer can retry with a new key until `pay_by`. A concurrency test found a real bug here; see section 9.
+Failed attempts are kept, and the customer can retry with a new key until `pay_by`. A concurrency test found a real bug here; see section 10.
 
 ---
 
-## 7. DevOps already in the project
+## 7. Login, tokens and permissions
+
+Phase 3 added login. Browsing restaurants and menus is still open to everyone; everything else needs you to be logged in, and what you may do depends on **who** you are and **what you own**.
+
+### Q: What's the difference between authentication and authorization?
+
+They're the two questions every request has to answer, in this order:
+
+| | Question | Fails with | Example in QuickServe |
+|---|---|---|---|
+| **Authentication** | Who are you? | `401 Unauthorized` | No token, an expired token, a forged token, a wrong password |
+| **Authorization** | Are you allowed to do *this*? | `403 Forbidden` (or `404`, see below) | A customer trying to accept an order; owner A restocking owner B's dish |
+
+People mix the two up constantly, including in HTTP itself, where "401 Unauthorized" really means "unauthenticated".
+
+### Q: How does logging in work?
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client (app or Swagger)
+    participant API as QuickServe API
+    participant DB as PostgreSQL
+
+    C->>API: POST /api/v1/auth/login, username = email, password
+    API->>DB: find the user by email
+    API->>API: Argon2 check of the password against the stored hash
+    API-->>C: access_token (a JWT signed with the server secret, valid 30 minutes)
+
+    C->>API: any request with header Authorization: Bearer access_token
+    API->>API: check the signature, the algorithm and the expiry time
+    API->>DB: load the user by the id inside the token
+    API->>API: role and ownership checks in the service layer
+    API-->>C: the result, or 401 / 403 / 404
+```
+
+In code: `app/modules/auth/service.py` does the login, `app/core/security.py` creates and checks tokens, and `get_current_user` in `app/modules/auth/dependencies.py` is the FastAPI dependency that every protected endpoint uses.
+
+### Q: What's inside a token? Is it secret?
+
+A JWT has three parts separated by dots: `header.payload.signature`. Ours carries:
+
+```json
+{"sub": "<your user id>", "role": "CUSTOMER", "type": "access", "iat": 1763371200, "exp": 1763373000}
+```
+
+**The payload is not encrypted, just base64-encoded.** Anyone holding a token can read it. `test_editing_the_role_inside_a_token_breaks_it` decodes a customer's token without any key, changes `"role"` to `"ADMIN"`, and sends it back. The server rejects it, because the **signature** no longer matches the contents and only the server has the secret to make a new one. So:
+
+- never put anything secret in a token (passwords, phone numbers, addresses);
+- the secret (`JWT_SECRET_KEY`) is the crown jewel. Whoever has it can mint a token for any user.
+
+### Q: The token already says `"role": "CUSTOMER"`. Why look the user up in the database on every request?
+
+Because tokens can't be taken back once issued. If we trusted the role inside the token, then demoting a user or deleting a stolen account would only take effect when their token expired. Loading the user by id (one primary-key lookup) means role changes and deletions apply on the very next request. `test_token_of_a_deleted_user_is_401` checks this. The role in the token is only informational, for example for a frontend that wants to show the right menu.
+
+The trade-off is the classic one between **stateless** (never touch the database, scale easily, can't revoke) and **stateful** (one query, can revoke). A short expiry (30 minutes) plus a database check is a sensible middle ground for a project like this.
+
+### Q: How are passwords stored?
+
+As **Argon2** hashes, via `pwdlib`. Argon2id is the first choice in OWASP's password storage guidance [27] and the algorithm FastAPI's tutorial uses [4]. Hashing is one-way: we can check a password against the hash, but nobody, including us, can turn the hash back into the password. That's the difference from encryption, which is reversible with the key.
+
+Argon2 is **slow on purpose**: about 100 ms per check on the machine that built this. That's harmless for one login, and it makes guessing billions of passwords from a stolen database impractical. It's also why the test suite hashes its shared test password once instead of once per test user.
+
+### Q: Why does a wrong password get exactly the same answer as an email that doesn't exist?
+
+If the login said "no such email" in one case and "wrong password" in the other, anyone could find out which emails have accounts just by trying them (**account enumeration**). OWASP's testing guide asks applications to return consistent generic error messages when the account name, password or other credentials are wrong [24]. QuickServe always answers `401 Incorrect email or password` (`test_wrong_password_and_unknown_email_look_identical`).
+
+The **timing** gives it away too: checking a password takes about 100 ms, but "no such user" could answer in 1 ms. So when the email doesn't exist, `verify_password` still runs one full Argon2 check against a dummy hash. Measured on the machine that built this: wrong password **108 ms**, unknown email **102 ms**, correct password **112 ms**. Indistinguishable from outside.
+
+### Q: Who can do what?
+
+| Action | Not logged in | Customer | Restaurant owner | Rider | Admin |
+|---|---|---|---|---|---|
+| Browse restaurants and menus | yes | yes | yes | yes | yes |
+| Sign up | as customer, owner or rider | | | | |
+| Create a restaurant | | | yes (becomes its owner) | | yes |
+| Add dishes, restock, switch dishes off, cycle history, restock suggestion, best sellers | | | **own restaurant only** | | any |
+| Place an order | | yes (it's theirs) | | | |
+| Pay for an order | | own orders only | | | |
+| See an order and its timeline | | own orders | orders of own restaurant | orders that are READY or later | all |
+| Accept, reject, start preparing, mark ready | | | own restaurant's orders | | |
+| Picked up, delivered | | | | yes | |
+| Cancel | | own order, before the restaurant accepts | | | any, before delivery |
+| Run the timeout job | | | | | yes |
+
+The order status rules from section 6 still apply on top of this: even the right person can't move an order from DELIVERED back to PREPARING.
+
+### Q: Why isn't "you're a restaurant owner" enough to restock a dish?
+
+Because then owner A could restock B's dishes, add dishes to B's menu or read B's sales figures, just by putting B's ids in the URL. Checking the role but forgetting **ownership of that specific object** is the number one API security risk on OWASP's 2023 list: Broken Object Level Authorization [26]. Every menu action goes through `ensure_can_manage(db, restaurant_id, user)`, which checks that the restaurant belongs to the caller (admins excepted). `test_owner_cannot_touch_another_owners_menu` tries all three attacks.
+
+### Q: Why do I get `404 Not Found` for someone else's order, and not `403 Forbidden`?
+
+`403` would confirm "this order exists, you just can't see it". `404` reveals nothing. The same order id answers `200` for its customer, its restaurant's owner and admins, and `404` for everyone else. Riders get `404` until the order is READY, because there's nothing for them to do before then.
+
+### Q: Why can't I sign up as an admin? Where do riders and admins come from?
+
+The sign-up schema only accepts `CUSTOMER`, `RESTAURANT_OWNER` or `RIDER`. If anyone could register as an admin, the role would protect nothing. Admins (and the demo rider) are created by `scripts/seed.py`. In a real system an existing admin would create them through a protected endpoint.
+
+### Q: Adding the RIDER role needed a hand-written migration. Why?
+
+Alembic's autogenerate **doesn't notice** a new value in a Python `Enum`. It would have produced an empty migration, and production would have crashed the first time a rider signed up. The migration (`migrations/versions/..._add_rider_role.py`) runs `ALTER TYPE user_role ADD VALUE 'RIDER'`. PostgreSQL can't remove an enum value, so the downgrade rebuilds the type, and it **refuses to run if rider accounts exist** rather than silently turning them into customers. A lesson from Phase 2 again: autogenerate is a draft.
+
+### Q: What stops someone from forging a token?
+
+- **The algorithm is pinned.** The server only accepts `HS256`. A famous JWT attack sends a token whose header says `"alg": "none"` (no signature at all); `test_unsigned_alg_none_token_is_401` shows it's rejected.
+- **The secret must be real outside your laptop.** The app refuses to start when `ENVIRONMENT` isn't `local` and `JWT_SECRET_KEY` is still the development value from `.env.example`, or when the secret is shorter than 32 characters (`test_dev_secret_is_refused_outside_local`). Failing loudly at startup beats running in production with a secret that's published on GitHub. In Phase 6 the real secret comes from AWS Secrets Manager.
+- **Tokens expire** after 30 minutes (`ACCESS_TOKEN_EXPIRE_MINUTES`), which limits the damage if one leaks.
+
+### Q: What's deliberately not built yet?
+
+| Missing | Why it matters | When |
+|---|---|---|
+| Refresh tokens | Today you log in again every 30 minutes | Later |
+| Logout / revoking a token | A leaked token works until it expires | Phase 4: a Redis "deny list" of token ids, each kept only until the token would have expired anyway |
+| Rate limiting on login | Someone could try thousands of passwords | Phase 4: Redis counters per email and per IP |
+| HTTPS | Tokens and passwords must never travel in plain text | Phase 6: TLS at the load balancer |
+| Rider assignment | Any rider can deliver any READY order | Later |
+
+### Q: How do I log in on the Swagger page?
+
+1. Open http://127.0.0.1:8000/docs and click **Authorize** (top right, padlock icon).
+2. Put the **email** in the `username` box (it's called username because that's the OAuth2 standard form) and the password in `password`. Leave the other fields empty.
+3. Click **Authorize**, then **Close**. Padlocks on the endpoints now show as locked, and Swagger sends your token with every request.
+4. To switch user, click **Authorize** again, then **Logout**, then log in as someone else.
+
+The demo accounts are printed by `python -m scripts.seed`:
+
+| Role | Email | Password |
+|---|---|---|
+| Customer | `customer@quickserve.dev` | `customer-pass-123` |
+| Restaurant owner (owns both demo restaurants) | `owner@quickserve.dev` | `owner-pass-123` |
+| Rider | `rider@quickserve.dev` | `rider-pass-123` |
+| Admin | `admin@quickserve.dev` | `admin-pass-123` |
+
+These are for local development only.
+
+---
+
+## 8. DevOps already in the project
 
 ### Q: Why do the tests use a real PostgreSQL instead of SQLite?
 
@@ -748,13 +910,13 @@ Docker Compose runs PostgreSQL 16, the same major version as CI and, later, AWS 
 | Install from `requirements-dev.lock` | Exact versions of every package, including dependencies of dependencies (next question) |
 | `ruff check` and `ruff format --check` | Style arguments end; obvious bugs (unused imports, shadowed names) caught before review |
 | `alembic upgrade head` + `alembic check` | **Fails if someone changed a model but forgot to create a migration**, a very common production incident |
-| `pytest` | All 40 tests, including the concurrency tests |
+| `pytest` | All 59 tests, including the concurrency and login-attack tests |
 | `concurrency: cancel-in-progress` | Two quick pushes cancel the older run instead of paying for both |
 | `timeout-minutes: 10` | A hung job can't burn CI minutes forever |
 
 ### Q: Why both `requirements-dev.txt` and `requirements-dev.lock`?
 
-`requirements*.txt` pins the packages we chose. But those packages have their own dependencies, which aren't pinned. This bit us while building the project: a fresh install pulled a newer `starlette` (1.10.0, where another environment had 1.7.0), and the tests started printing a deprecation warning about the HTTP test client. The `.lock` file is `pip freeze` from an environment where all 40 tests passed on Python 3.11: every package at an exact version. CI and, later, the Docker image install from the lock, so a new release of some sub-dependency can't break a build overnight. You regenerate the lock on purpose, when you upgrade.
+`requirements*.txt` pins the packages we chose. But those packages have their own dependencies, which aren't pinned. This bit us while building the project: a fresh install pulled a newer `starlette` (1.10.0, where another environment had 1.7.0), and the tests started printing a deprecation warning about the HTTP test client. The `.lock` file is `pip freeze` from an environment where the whole test suite passed on Python 3.11: every package at an exact version. CI and, later, the Docker image install from the lock, so a new release of some sub-dependency can't break a build overnight. You regenerate the lock on purpose, when you upgrade.
 
 ### Q: What's the difference between `/health` and `/health/ready`?
 
@@ -781,7 +943,7 @@ With several app servers, each machine's clock drifts a little. Deadlines like `
 
 ### Q: How are settings and secrets handled?
 
-All configuration comes from environment variables or `.env`, read by `pydantic-settings` (the "config in the environment" rule of twelve-factor apps). `.env` is git-ignored; `.env.example` documents every setting. The same code (and later the same Docker image) runs locally, in CI and in the cloud, and only the environment changes. In Phase 6 secrets move to AWS Secrets Manager or SSM Parameter Store.
+All configuration comes from environment variables or `.env`, read by `pydantic-settings` (the "config in the environment" rule of twelve-factor apps). `.env` is git-ignored; `.env.example` documents every setting. The same code (and later the same Docker image) runs locally, in CI and in the cloud, and only the environment changes. In Phase 6 secrets move to AWS Secrets Manager or SSM Parameter Store. The app already guards the most important one: it refuses to start outside local development if `JWT_SECRET_KEY` is still the published development value.
 
 ### Q: What will we monitor once this is deployed?
 
@@ -797,7 +959,7 @@ These become Prometheus metrics and Grafana panels in Phase 7.
 
 ---
 
-## 8. FinOps: thinking in cost per order
+## 9. FinOps: thinking in cost per order
 
 ### Q: What is FinOps, in one paragraph?
 
@@ -857,7 +1019,7 @@ Explaining the cycle data this way shows you understand FinOps as a way of think
 
 ---
 
-## 9. Bugs the tests caught while building this
+## 10. Bugs the tests caught while building this
 
 These are real, and they make better interview stories than any feature list.
 
@@ -871,7 +1033,7 @@ These are real, and they make better interview stories than any feature list.
 
 ---
 
-## 10. Project structure and API
+## 11. Project structure and API
 
 ```
 quickserve/
@@ -880,6 +1042,7 @@ quickserve/
 │   ├── api/router.py             mounts every module under /api/v1
 │   ├── core/
 │   │   ├── config.py             all settings (DB, pool, timeouts, fees, tax rates)
+│   │   ├── security.py           password hashing (Argon2), JWT create/verify
 │   │   ├── exceptions.py         domain errors -> HTTP codes in one place
 │   │   └── money.py              Decimal rounding for bills
 │   ├── database/
@@ -887,7 +1050,8 @@ quickserve/
 │   │   ├── session.py            engine, pool, get_db(), transaction()
 │   │   └── models.py             imports every model (for Alembic)
 │   └── modules/                  one folder per business area (modular monolith)
-│       ├── users/                model, schema, service, router
+│       ├── auth/                 login endpoint, get_current_user, require_roles
+│       ├── users/                model (4 roles), schema, service, router
 │       ├── restaurants/
 │       ├── menu/                 model (MenuItem, InventoryCycle), repository, service,
 │       │                         analytics (ORM + raw SQL versions), schema, router
@@ -899,7 +1063,7 @@ quickserve/
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        40 tests, real PostgreSQL
+├── tests/                        59 tests, real PostgreSQL
 ├── .github/workflows/ci.yml
 ├── docker-compose.yml
 ├── requirements.txt / requirements-dev.txt / requirements-dev.lock
@@ -909,39 +1073,42 @@ quickserve/
 
 **Layering inside a module:** `router` (HTTP in and out, nothing else) → `service` (business rules, transactions) → `repository` (queries). Services raise domain errors, never `HTTPException`, so the same service works from a background job or a script. Modules talk to each other through small public functions (for example `payments/refunds.py`), never by reaching into each other's tables. That's what will let us split payments or notifications into their own services in Phase 8 without touching the callers.
 
-**Endpoints** (all under `/api/v1` except health):
+**Endpoints** (all under `/api/v1` except health). "Owner" means the owner of *that* restaurant; admins can do everything an owner can:
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/users` | Register |
-| POST, GET | `/restaurants` | Create, list (paginated) |
-| POST | `/restaurants/{id}/menu` | Add a menu item (opens stock cycle 1) |
-| GET | `/restaurants/{id}/menu` | Customer menu with `orderable`, badge, units left |
-| GET | `/restaurants/{id}/menu/manage` | Owner view with raw stock/consumed counters |
-| POST | `/menu/{id}/restock` | Close and archive the cycle, open a new one |
-| PATCH | `/menu/{id}/availability` | On / off / off until a time |
-| GET | `/menu/{id}/cycles` | Cycle history |
-| GET | `/menu/{id}/restock-suggestion` | Suggested quantity, with reasons |
-| GET | `/restaurants/{id}/best-sellers?days=7` | Ranked report |
-| POST | `/orders` | Place an order (reserves stock, all or nothing) |
-| GET | `/orders/{id}` and `/orders/{id}/timeline` | Order with bill; status history |
-| PATCH | `/orders/{id}/status` | Restaurant / rider / support transitions |
-| POST | `/orders/{id}/cancel` | Customer (before acceptance) or support |
-| POST | `/orders/{id}/payments` | Mock payment; needs `Idempotency-Key`; `?simulate=failure` to test failures |
-| GET | `/orders/{id}/payments`, `/payments/{id}` | Payment attempts |
-| POST | `/admin/jobs/order-timeouts` | Run the timeout job by hand |
-| GET | `/health`, `/health/ready` | Liveness, readiness |
+| Method | Path | Who | Purpose |
+|---|---|---|---|
+| POST | `/auth/login` | anyone | Email + password in, access token out |
+| POST | `/users` | anyone | Sign up as customer, restaurant owner or rider |
+| GET | `/users/me` | logged in | Who am I? |
+| GET | `/restaurants` | anyone | List restaurants (paginated) |
+| POST | `/restaurants` | restaurant owner | Create a restaurant you own |
+| GET | `/restaurants/{id}/menu` | anyone | Customer menu with `orderable`, badge, units left |
+| POST | `/restaurants/{id}/menu` | owner | Add a dish (opens stock cycle 1) |
+| GET | `/restaurants/{id}/menu/manage` | owner | Raw stock/consumed counters |
+| POST | `/menu/{id}/restock` | owner | Close and archive the cycle, open a new one |
+| PATCH | `/menu/{id}/availability` | owner | On / off / off until a time |
+| GET | `/menu/{id}/cycles` | owner | Cycle history |
+| GET | `/menu/{id}/restock-suggestion` | owner | Suggested quantity, with reasons |
+| GET | `/restaurants/{id}/best-sellers?days=7` | owner | Ranked report |
+| POST | `/orders` | customer | Place an order (reserves stock, all or nothing) |
+| GET | `/orders/{id}`, `/orders/{id}/timeline` | its customer, owner, rider (once READY), admin | Order with bill; status history |
+| PATCH | `/orders/{id}/status` | owner, rider, admin | Status changes allowed for your role |
+| POST | `/orders/{id}/cancel` | its customer (before acceptance), admin | Cancel with a reason |
+| POST | `/orders/{id}/payments` | its customer | Mock payment; needs `Idempotency-Key`; `?simulate=failure` to test failures |
+| GET | `/orders/{id}/payments`, `/payments/{id}` | same as the order | Payment attempts |
+| POST | `/admin/jobs/order-timeouts` | admin | Run the timeout job by hand |
+| GET | `/health`, `/health/ready` | anyone | Liveness, readiness |
 
 ---
 
-## 11. Roadmap
+## 12. Roadmap
 
 Each phase ends with something you can show: a passing CI run, a live URL, a dashboard screenshot.
 
 | Phase | What we build | Concepts |
 |---|---|---|
-| **3. Auth** (next) | Login, JWT access tokens, role-based permissions replacing `customer_id`/`actor` in requests | Hashing vs encryption, token expiry, authorization in the service layer |
-| **4. Redis, jobs, logging** | Cache the customer menu (invalidated on order/restock), schedule the timeout job every minute, structured JSON logs with request IDs | Cache invalidation, at-least-once jobs, log cost |
+| **3. Auth** (done) | Login, JWT access tokens, four roles, ownership checks, rider role migration | Authentication vs authorization, hashing vs encryption, token expiry, object-level authorization |
+| **4. Redis, jobs, logging** (next) | Cache the customer menu (invalidated on order/restock), schedule the timeout job every minute, login rate limiting and token revocation in Redis, structured JSON logs with request IDs | Cache invalidation, at-least-once jobs, rate limiting, log cost |
 | **5. Docker and CI/CD** | Multi-stage Dockerfile, non-root user, Compose with `api` + `db` + `redis`, CI builds and pushes the image | Image layers and size, container networking |
 | **6. AWS and Terraform** | VPC, EC2 or ECS, RDS PostgreSQL, Secrets Manager, Nginx, everything in Terraform with remote state | IAM least privilege, public vs private subnets, `plan`/`apply`/`destroy` |
 | **7. Kubernetes and monitoring** | Minikube first: Deployments, Services, Ingress, ConfigMaps, Secrets, HPA, probes wired to `/health` and `/health/ready`; Prometheus + Grafana with the business signals above | Requests vs limits, rolling updates, what happens when a pod dies |
@@ -949,7 +1116,7 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 
 ---
 
-## 12. Interview cheat sheet
+## 13. Interview cheat sheet
 
 **How do you prevent overselling?** A single conditional UPDATE (`consumed = consumed + q WHERE consumed + q <= stock RETURNING ...`). The check and the write happen together under the row lock; the second racer re-checks the WHERE clause against the committed row and gets nothing. A CHECK constraint guards against impossible values, but it can't prevent lost updates. Our race demo showed 40 orders accepted for 10 units with the naive version.
 
@@ -973,11 +1140,21 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 
 **How would you scale database connections?** Count the pools (workers × pool size × replicas) against `max_connections`, and add PgBouncer before buying a bigger instance.
 
+**Authentication vs authorization?** Authentication is who you are (login, token, `401`); authorization is what you may do (`403`). Both are checked on every request.
+
+**What's in a JWT, and is it secret?** Header, payload and signature. The payload is only base64-encoded, so anyone can read it; the signature only proves it wasn't changed. Never put secrets in it, and guard the signing key.
+
+**Why look the user up when the token already has their role?** Tokens can't be revoked, so the database is the source of truth: role changes and deleted accounts take effect immediately. Trade-off: stateless vs revocable.
+
+**What's Broken Object Level Authorization?** Checking a user's role but not that they own the specific object, so changing an id in the URL reaches someone else's data. It's number one on OWASP's 2023 API list; we check ownership in the service layer for every restaurant and order.
+
+**Why the same error for a wrong password and an unknown email?** To stop account enumeration. The timing must match too, so an unknown email still runs one full password-hash check.
+
 **What's unit economics in FinOps?** Cost per unit of business value. For us: infrastructure cost per completed order, tracked as orders grow.
 
 ---
 
-## 13. References
+## 14. References
 
 Business and tax figures change often; the dates show when each was reported.
 
@@ -1004,3 +1181,7 @@ Business and tax figures change often; the dates show when each was reported.
 21. AWS, *AWS Free Tier*. https://aws.amazon.com/free
 22. AWS re:Post Knowledge Center, *When does the AWS Free Tier start and expire?* https://www.repost.aws/knowledge-center/aws-free-tier-account-start-expire
 23. pwdlib on PyPI (why it replaced passlib, which stopped working on Python 3.13). https://pypi.org/project/pwdlib/0.1.0
+24. OWASP Web Security Testing Guide, *Testing for Account Enumeration and Guessable User Account*. https://owasp.org/www-project-web-security-testing-guide/stable/4-Web_Application_Security_Testing/03-Identity_Management_Testing/04-Testing_for_Account_Enumeration_and_Guessable_User_Account.html
+25. OWASP, *Authentication Cheat Sheet*. https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
+26. OWASP API Security Top 10 2023, *API1:2023 Broken Object Level Authorization*. https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/
+27. OWASP, *Password Storage Cheat Sheet*. https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html

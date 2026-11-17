@@ -13,13 +13,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import Conflict
+from app.core.exceptions import Conflict, NotFound
 from app.database.session import transaction
 from app.modules.menu.repository import db_now
 from app.modules.orders import service as orders
-from app.modules.orders.model import OrderStatus
+from app.modules.orders.model import Order, OrderStatus
 from app.modules.payments.model import Payment, PaymentStatus
 from app.modules.payments.schema import SimulatedOutcome
+from app.modules.users.model import User
 
 
 def _by_key(db: Session, key: str) -> Payment | None:
@@ -27,9 +28,21 @@ def _by_key(db: Session, key: str) -> Payment | None:
 
 
 def pay(
-    db: Session, order_id: uuid.UUID, idempotency_key: str, outcome: SimulatedOutcome, settings: Settings | None = None
+    db: Session,
+    order_id: uuid.UUID,
+    idempotency_key: str,
+    outcome: SimulatedOutcome,
+    customer: User,
+    settings: Settings | None = None,
 ) -> tuple[Payment, bool]:
-    """Returns (payment, replayed). replayed=True means this key was seen before."""
+    """Returns (payment, replayed). replayed=True means this key was seen before.
+
+    Only the customer who placed the order can pay for it.
+    """
+    order = db.get(Order, order_id)
+    if order is None or order.customer_id != customer.id:
+        raise NotFound("Order not found")
+
     existing = _by_key(db, idempotency_key)
     if existing is not None:
         if existing.order_id != order_id:
@@ -77,3 +90,19 @@ def pay(
             return winner, True
         raise Conflict("This order already has a successful payment") from None
     return payment, False
+
+
+def list_for_order(db: Session, order_id: uuid.UUID, user: User) -> list[Payment]:
+    orders.get_order(db, order_id, user)  # same visibility rules as the order itself
+    return list(db.execute(select(Payment).where(Payment.order_id == order_id).order_by(Payment.created_at)).scalars())
+
+
+def get_payment(db: Session, payment_id: uuid.UUID, user: User) -> Payment:
+    payment = db.get(Payment, payment_id)
+    if payment is None:
+        raise NotFound("Payment not found")
+    try:
+        orders.get_order(db, payment.order_id, user)
+    except NotFound:
+        raise NotFound("Payment not found") from None
+    return payment

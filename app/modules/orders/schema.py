@@ -13,21 +13,20 @@ class OrderLineIn(BaseModel):
 
 
 class OrderCreate(BaseModel):
-    customer_id: uuid.UUID  # replaced by the logged-in user once auth exists
+    # No customer_id: the order belongs to whoever is logged in.
     restaurant_id: uuid.UUID
     delivery_address: str = Field(min_length=5, max_length=500)
     items: list[OrderLineIn] = Field(min_length=1, max_length=30)
 
 
 class StatusUpdate(BaseModel):
+    # No "actor" field any more: who you are comes from your login token, so
+    # nobody can claim to be "the restaurant" just by typing it.
     status: OrderStatus
-    # "system" (payments, timeouts) and "customer" (use /cancel) are not accepted here.
-    actor: str = Field(pattern="^(restaurant|rider|support)$")
     note: str | None = Field(default=None, max_length=300)
 
 
 class CancelRequest(BaseModel):
-    actor: str = Field(default="customer", pattern="^(customer|support)$")
     reason: str = Field(min_length=3, max_length=300)
 
 
