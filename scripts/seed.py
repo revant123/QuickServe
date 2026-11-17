@@ -49,7 +49,14 @@ def print_logins() -> None:
 def main() -> None:
     with SessionLocal() as db:
         if db.execute(select(User).where(User.email == "owner@quickserve.dev")).scalar_one_or_none():
-            print("Demo data already loaded.")
+            # Data from an older seed: add any demo accounts that didn't exist back then
+            # (the rider and admin arrived with Phase 3).
+            for email, (name, role, password) in DEMO_USERS.items():
+                if db.execute(select(User).where(User.email == email)).scalar_one_or_none() is None:
+                    db.add(User(name=name, email=email, role=role, password_hash=hash_password(password)))
+                    print(f"Added missing demo account: {email}")
+            db.commit()
+            print("Demo restaurants already loaded.")
             print_logins()
             return
 
