@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # postgresql+psycopg:// selects the psycopg 3 driver. A bare postgresql://
     # URL would make SQLAlchemy look for the older psycopg2 driver.
-    database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5433/quickserve"
+    database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5434/quickserve"
 
     # Print every SQL statement SQLAlchemy sends. Turn this on while learning.
     sql_echo: bool = False
