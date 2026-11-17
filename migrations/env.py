@@ -11,7 +11,10 @@ from app.database.base import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: by default fileConfig switches off every
+    # logger that already exists. When migrations run inside the app's process
+    # (as in the test suite), that silently killed all of QuickServe's logs.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 # Tests (and CI) can point migrations at another database with: alembic -x db_url=...

@@ -36,5 +36,28 @@ services:
           cpus: "1.0"
           memory: 512M
 
+  redis:
+    image: redis:7-alpine
+    container_name: quickserve-redis
+    ports:
+      # 6380 on your Mac -> 6379 in the container, so it can't clash with any
+      # other project's Redis on the default port 6379.
+      - "6380:6379"
+    # --maxmemory: Redis keeps everything in RAM, so cap it. When it's full,
+    # volatile-ttl evicts the keys closest to expiring first: menu cache entries
+    # (seconds left) go before login counters and logged-out tokens (minutes left).
+    # --save "": no snapshots to disk. Everything here is safe to lose.
+    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "volatile-ttl", "--save", ""]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
 volumes:
   pgdata:

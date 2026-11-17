@@ -40,6 +40,31 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
 
+    # --- Redis (Phase 4): cache, login rate limits, logged-out tokens ---
+    # Host port 6380, not the default 6379, so it can't collide with another
+    # project's Redis on the same machine (same idea as PostgreSQL on 5434).
+    redis_url: str = "redis://localhost:6380/0"
+    # If Redis is slow or down, give up quickly instead of making every request
+    # wait. Every Redis feature here degrades gracefully without it.
+    redis_timeout_seconds: float = 0.5
+
+    # Customer menu cache. Short on purpose: stock badges ("Only 3 left") may be
+    # this many seconds old. Ordering is never affected, because the order itself
+    # always checks stock in PostgreSQL.
+    menu_cache_ttl_seconds: int = 10
+
+    # Failed logins allowed per window before answering 429 Too Many Requests.
+    login_max_failures_per_email: int = 5
+    login_max_failures_per_ip: int = 20
+    login_failure_window_seconds: int = 900
+
+    # Background worker: how often to run the order timeout job.
+    worker_interval_seconds: int = 30
+
+    # Logging: JSON lines (for log tools) or plain text (easier to read while coding).
+    log_level: str = "INFO"
+    log_json: bool = True
+
     # Connection pool. See README: "What is connection pooling and why does it cost money?"
     db_pool_size: int = 5
     db_max_overflow: int = 10

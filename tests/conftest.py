@@ -15,6 +15,11 @@ from app.core.config import Settings  # noqa: E402
 
 # Tests use the same server, port and credentials as your app (from .env), but a
 # separate database: <your database>_test. CI sets DATABASE_URL itself.
+# Redis: same server as the app, but database number 15, emptied after every test.
+if "REDIS_URL" not in os.environ:
+    _redis_base = Settings().redis_url.rsplit("/", 1)[0]
+    os.environ["REDIS_URL"] = f"{_redis_base}/15"
+
 if "DATABASE_URL" not in os.environ:
     _app_url = make_url(Settings().database_url)
     os.environ["DATABASE_URL"] = _app_url.set(database=f"{_app_url.database}_test").render_as_string(
@@ -29,6 +34,7 @@ from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
+from app.core.redis import get_redis  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.database.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
@@ -48,6 +54,8 @@ TABLES = "payments, order_status_events, order_items, orders, inventory_cycles, 
 # at your dev data).
 if not engine.url.database or not engine.url.database.endswith("_test"):
     raise RuntimeError(f"Refusing to run tests against database '{engine.url.database}': its name must end in _test")
+if not os.environ["REDIS_URL"].endswith("/15"):
+    raise RuntimeError("Refusing to run tests: REDIS_URL must use Redis database 15, which the tests empty")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -61,7 +69,9 @@ def migrated_database():
 
 @pytest.fixture(autouse=True)
 def clean_tables():
+    get_redis().flushdb()
     yield
+    get_redis().flushdb()
     # Tests commit for real (concurrency tests need several connections), so
     # instead of rolling back we empty the tables after each test.
     with engine.begin() as conn:

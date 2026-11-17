@@ -16,8 +16,9 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import Forbidden, Unauthorized
-from app.core.security import decode_access_token
+from app.core.security import TokenClaims, decode_access_token
 from app.database.session import get_db
+from app.modules.auth import revocation
 from app.modules.users.model import Role, User
 
 # tokenUrl tells Swagger UI where its "Authorize" button should send email + password.
@@ -25,10 +26,17 @@ from app.modules.users.model import Role, User
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
 
-def get_current_user(token: str | None = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+def get_token_claims(token: str | None = Depends(oauth2_scheme)) -> TokenClaims:
     if not token:
         raise Unauthorized("Not logged in")
-    user_id = decode_access_token(token)
+    claims = decode_access_token(token)
+    if revocation.is_revoked(claims):
+        raise Unauthorized("This token was logged out, please log in again")
+    return claims
+
+
+def get_current_user(claims: TokenClaims = Depends(get_token_claims), db: Session = Depends(get_db)) -> User:
+    user_id = claims.user_id
     # Look the user up on every request instead of trusting the role inside the
     # token. If an admin changes someone's role or deletes the account, it takes
     # effect immediately, not when the token expires.

@@ -6,7 +6,7 @@ restaurant (or an admin); the service layer checks the ownership.
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.database.session import get_db
@@ -39,9 +39,12 @@ def add_menu_item(
 
 
 @router.get("/restaurants/{restaurant_id}/menu", response_model=list[MenuItemPublic])
-def customer_menu(restaurant_id: uuid.UUID, db: Session = Depends(get_db)):
-    """Public: what a customer sees, no login needed."""
-    return service.customer_menu(db, restaurant_id)
+def customer_menu(restaurant_id: uuid.UUID, response: Response, db: Session = Depends(get_db)):
+    """Public: what a customer sees, no login needed. Cached in Redis for a few seconds;
+    the X-Cache response header says HIT, MISS or BYPASS (Redis unavailable)."""
+    items, cache_status = service.customer_menu_cached(db, restaurant_id)
+    response.headers["X-Cache"] = cache_status
+    return items
 
 
 @router.get("/restaurants/{restaurant_id}/menu/manage", response_model=list[MenuItemOut])

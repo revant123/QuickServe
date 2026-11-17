@@ -62,7 +62,13 @@ def test_expired_token_is_401(client, customer):
     s = get_settings()
     past = datetime.now(UTC) - timedelta(hours=2)
     token = jwt.encode(
-        {"sub": str(customer.id), "type": "access", "iat": past, "exp": past + timedelta(minutes=30)},
+        {
+            "sub": str(customer.id),
+            "type": "access",
+            "jti": "test-token-id",
+            "iat": past,
+            "exp": past + timedelta(minutes=30),
+        },
         s.jwt_secret_key,
         algorithm=s.jwt_algorithm,
     )
@@ -73,7 +79,13 @@ def test_expired_token_is_401(client, customer):
 def test_token_signed_with_another_key_is_401(client, customer):
     now = datetime.now(UTC)
     forged = jwt.encode(
-        {"sub": str(customer.id), "type": "access", "iat": now, "exp": now + timedelta(minutes=5)},
+        {
+            "sub": str(customer.id),
+            "type": "access",
+            "jti": "test-token-id",
+            "iat": now,
+            "exp": now + timedelta(minutes=5),
+        },
         "an-attacker-guessed-secret-that-is-long-enough",
         algorithm="HS256",
     )
@@ -84,7 +96,13 @@ def test_unsigned_alg_none_token_is_401(client, customer):
     """The classic JWT attack: a token that says "no signature needed"."""
     now = datetime.now(UTC)
     unsigned = jwt.encode(
-        {"sub": str(customer.id), "type": "access", "iat": now, "exp": now + timedelta(minutes=5)},
+        {
+            "sub": str(customer.id),
+            "type": "access",
+            "jti": "test-token-id",
+            "iat": now,
+            "exp": now + timedelta(minutes=5),
+        },
         None,
         algorithm="none",
     )

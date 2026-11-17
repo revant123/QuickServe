@@ -12,6 +12,7 @@ Two different jobs, two different tools:
 """
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -48,14 +49,22 @@ def create_access_token(user_id: uuid.UUID, role: str, settings: Settings | None
         "sub": str(user_id),  # subject: who this token is about
         "role": role,  # informational only; permissions are checked against the database
         "type": "access",
+        "jti": uuid.uuid4().hex,  # token id: lets us revoke this one token on logout
         "iat": now,  # issued at
         "exp": now + timedelta(minutes=settings.access_token_expire_minutes),  # expires
     }
     return jwt.encode(claims, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
-def decode_access_token(token: str, settings: Settings | None = None) -> uuid.UUID:
-    """Return the user id inside a valid token, or raise Unauthorized."""
+@dataclass(frozen=True)
+class TokenClaims:
+    user_id: uuid.UUID
+    token_id: str
+    expires_at: datetime
+
+
+def decode_access_token(token: str, settings: Settings | None = None) -> TokenClaims:
+    """Return the claims of a valid token, or raise Unauthorized."""
     settings = settings or get_settings()
     try:
         claims = jwt.decode(
@@ -64,7 +73,7 @@ def decode_access_token(token: str, settings: Settings | None = None) -> uuid.UU
             # Pin the algorithm. Accepting whatever the token's header claims
             # (e.g. "none") is a classic JWT vulnerability.
             algorithms=[settings.jwt_algorithm],
-            options={"require": ["exp", "sub", "iat"]},
+            options={"require": ["exp", "sub", "iat", "jti"]},
         )
     except jwt.ExpiredSignatureError:
         raise Unauthorized("Token has expired, please log in again") from None
@@ -73,6 +82,7 @@ def decode_access_token(token: str, settings: Settings | None = None) -> uuid.UU
     if claims.get("type") != "access":
         raise Unauthorized("Invalid token")
     try:
-        return uuid.UUID(claims["sub"])
+        user_id = uuid.UUID(claims["sub"])
     except ValueError:
         raise Unauthorized("Invalid token") from None
+    return TokenClaims(user_id, str(claims["jti"]), datetime.fromtimestamp(claims["exp"], UTC))
