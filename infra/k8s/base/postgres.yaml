@@ -51,6 +51,7 @@ spec:
             exec:
               command: ["pg_isready", "-U", "postgres", "-d", "quickserve"]
             periodSeconds: 5
+            timeoutSeconds: 3 # the 1 s default is too tight on a busy laptop
           resources:
             requests:
               cpu: 100m

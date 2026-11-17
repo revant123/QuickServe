@@ -16,6 +16,9 @@ NS=quickserve
 # this deploy's image runs its migrations.
 kubectl -n "$NS" delete job migrate --ignore-not-found --wait=true >/dev/null 2>&1 || true
 
+# Was QuickServe already running before this deploy?
+ALREADY_DEPLOYED=$(kubectl -n "$NS" get deployment api -o name 2>/dev/null || true)
+
 kubectl apply -k "$OVERLAY"
 
 echo "Waiting for PostgreSQL and Redis..."
@@ -24,6 +27,16 @@ kubectl -n "$NS" rollout status deployment/redis --timeout=120s
 
 echo "Waiting for the migration Job..."
 kubectl -n "$NS" wait --for=condition=complete job/migrate --timeout=300s
+
+# The local overlay runs the moving `main` tag. If nothing in the YAML changed,
+# `kubectl apply` leaves the old pods alone, still on yesterday's code. A
+# restart makes new pods, and imagePullPolicy: Always makes them fetch the
+# newest `main` from ghcr.io. (Immutable sha- tags don't need this: a new tag
+# is a change in the YAML, so Kubernetes rolls the pods by itself.)
+if [[ -n "$ALREADY_DEPLOYED" && "$OVERLAY" != *ci* ]]; then
+  echo "Restarting the API and worker to pick up the newest image..."
+  kubectl -n "$NS" rollout restart deployment/api deployment/worker
+fi
 
 echo "Waiting for the API and the worker..."
 kubectl -n "$NS" rollout status deployment/api --timeout=300s
