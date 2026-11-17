@@ -6,7 +6,9 @@ produces a migration without that table.
 """
 
 from app.modules.menu.model import InventoryCycle, MenuItem  # noqa: F401
+from app.modules.notifications.model import Notification  # noqa: F401
 from app.modules.orders.model import Order, OrderItem, OrderStatusEvent  # noqa: F401
+from app.modules.outbox.model import OutboxEvent  # noqa: F401
 from app.modules.payments.model import Payment  # noqa: F401
 from app.modules.restaurants.model import Restaurant  # noqa: F401
 from app.modules.users.model import User  # noqa: F401

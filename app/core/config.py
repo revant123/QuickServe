@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     # different ports when they run on the same machine.
     metrics_port: int = 9100
     worker_metrics_port: int = 9101
+    notifier_metrics_port: int = 9102
+
+    # Notifier (Phase 8): delivers outbox events as notifications.
+    notifier_interval_seconds: float = 2.0  # how often to look for new events when idle
+    notifier_batch_size: int = 100
+    notifier_max_attempts: int = 5  # then the event is dead-lettered for a human to look at
+    outbox_retention_days: int = 7  # delivered events are deleted after this
 
     # Logging: JSON lines (for log tools) or plain text (easier to read while coding).
     log_level: str = "INFO"

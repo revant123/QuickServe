@@ -28,6 +28,7 @@ from app.modules.orders.state_machine import (
     WASTE_STOCK_FROM,
     can_transition,
 )
+from app.modules.outbox import service as outbox
 from app.modules.payments.refunds import refund_for_order
 from app.modules.restaurants.model import Restaurant
 from app.modules.restaurants.service import owns_restaurant
@@ -103,6 +104,8 @@ def place_order(db: Session, data: OrderCreate, customer: User, settings: Settin
         db.add(order)
         db.flush()
         db.add(OrderStatusEvent(order_id=order.id, from_status=None, to_status=OrderStatus.PLACED, actor="customer"))
+        # Same transaction as the order itself: the event exists if and only if the order does.
+        _publish(db, order, "order.placed", previous=None, actor="customer")
     # The transaction has committed by this point, so the order really exists.
     ORDERS_PLACED.inc()
     ORDER_VALUE.observe(float(order.grand_total))
@@ -175,8 +178,38 @@ def _apply(db: Session, order: Order, target: OrderStatus, actor: str, note: str
     db.add(OrderStatusEvent(order_id=order.id, from_status=current, to_status=target, actor=actor, note=note))
     # Counted only if this transaction commits (see app/core/metrics.py).
     after_commit(db, lambda: ORDER_STATUS_CHANGES.labels(target.value, actor).inc())
+    # Tell the notifications service, in the same transaction (the outbox pattern).
+    _publish(db, order, "order.status_changed", previous=current, actor=actor, note=note)
+
     log_event(
         log, logging.INFO, "order status changed", order_id=order.id, frm=current.value, to=target.value, actor=actor
+    )
+
+
+def _publish(
+    db: Session, order: Order, event_type: str, previous: OrderStatus | None, actor: str, note: str | None = None
+) -> None:
+    """Write an outbox event carrying everything a consumer needs, so the
+    notifications service never has to read the orders or restaurants tables."""
+    restaurant = db.get(Restaurant, order.restaurant_id)
+    outbox.record(
+        db,
+        event_type,
+        "order",
+        order.id,
+        {
+            "order_id": str(order.id),
+            "customer_id": str(order.customer_id),
+            "restaurant_id": str(order.restaurant_id),
+            "restaurant_name": restaurant.name,
+            "owner_id": str(restaurant.owner_id),
+            "status": order.status.value,
+            "previous_status": previous.value if previous else None,
+            "actor": actor,
+            "note": note,
+            "grand_total": str(order.grand_total),
+            "item_count": sum(line.quantity for line in order.items),
+        },
     )
 
 

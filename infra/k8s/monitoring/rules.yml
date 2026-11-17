@@ -43,6 +43,10 @@ groups:
             /
           clamp_min(sum(rate(quickserve_menu_cache_requests_total[5m])), 1e-9)
 
+      # ----- Notifications (Phase 8) -----
+      - record: quickserve:notifications:per_minute
+        expr: sum(rate(quickserve_notifications_created_total[5m])) * 60
+
       # ----- FinOps: the unit metric -----
       # What the infrastructure costs per hour, in US dollars. 0.04 is the
       # Phase 6 AWS estimate (t4g.small + db.t4g.micro + public IPv4 + disks).
@@ -111,6 +115,37 @@ groups:
           severity: critical
         annotations:
           summary: "Only {{ $value | humanizePercentage }} of payments succeed"
+
+      # ----- Notifications (Phase 8) -----
+      - alert: QuickServeNotifierDown
+        expr: sum(up{app="notifier"}) == 0 or absent(up{app="notifier"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The notifier isn't running; order events are piling up in the outbox (none are lost)
+          runbook: "kubectl -n quickserve get pods -l app.kubernetes.io/name=notifier; kubectl -n quickserve logs deploy/notifier --tail=50"
+
+      # Events wait longer than a minute: customers hear about their order late.
+      - alert: QuickServeNotificationsDelayed
+        expr: max(quickserve_outbox_oldest_pending_age_seconds) > 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The oldest waiting order event is {{ $value | humanizeDuration }} old"
+          runbook: "kubectl -n quickserve logs deploy/notifier | grep -E 'will retry|dead-lettered'"
+
+      # The notifier gave up on an event after 5 attempts. A person must look:
+      # fix the cause, then set dead_at = NULL to send it again.
+      - alert: QuickServeOutboxDeadLetters
+        expr: max(quickserve_outbox_dead_events) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} order event(s) could not be delivered"
+          runbook: "SELECT id, event_type, attempts, last_error FROM outbox_events WHERE dead_at IS NOT NULL;"
 
       # Someone is guessing passwords hard enough to hit the rate limit often.
       - alert: QuickServeLoginAttack

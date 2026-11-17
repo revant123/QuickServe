@@ -124,3 +124,61 @@ tests:
         exp_samples:
           - labels: "{}"
             value: 0.000167
+
+  # 7. Notifier: not running -> alert; events stuck for minutes -> alert; dead letters -> alert.
+  - interval: 1m
+    input_series:
+      - series: 'up{app="notifier",pod="notifier-1"}'
+        values: "0x10"
+      - series: "quickserve_outbox_oldest_pending_age_seconds"
+        values: "0+60x10" # the oldest event keeps getting older
+      - series: "quickserve_outbox_dead_events"
+        values: "0 0 1 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: QuickServeNotifierDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: QuickServeNotifierDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: The notifier isn't running; order events are piling up in the outbox (none are lost)
+              runbook: "kubectl -n quickserve get pods -l app.kubernetes.io/name=notifier; kubectl -n quickserve logs deploy/notifier --tail=50"
+      - eval_time: 10m
+        alertname: QuickServeNotificationsDelayed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "The oldest waiting order event is 10m 0s old"
+              runbook: "kubectl -n quickserve logs deploy/notifier | grep -E 'will retry|dead-lettered'"
+      - eval_time: 5m
+        alertname: QuickServeOutboxDeadLetters
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "1 order event(s) could not be delivered"
+              runbook: "SELECT id, event_type, attempts, last_error FROM outbox_events WHERE dead_at IS NOT NULL;"
+
+  # 8. A healthy notifier: events delivered within seconds -> silence.
+  - interval: 1m
+    input_series:
+      - series: 'up{app="notifier",pod="notifier-1"}'
+        values: "1x10"
+      - series: "quickserve_outbox_oldest_pending_age_seconds"
+        values: "0 2 0 1 0 0 3 0 0 0 0"
+      - series: "quickserve_outbox_dead_events"
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: QuickServeNotifierDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: QuickServeNotificationsDelayed
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: QuickServeOutboxDeadLetters
+        exp_alerts: []
