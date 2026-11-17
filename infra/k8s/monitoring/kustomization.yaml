@@ -1,5 +1,6 @@
-# Monitoring for QuickServe: Prometheus (collects numbers, runs alert rules)
-# and Grafana (dashboards). Included by both overlays.
+# Monitoring for QuickServe: Prometheus (collects numbers, runs alert rules),
+# Grafana (dashboards) and Alertmanager + Mailpit (alert emails). Included by
+# both overlays.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -13,6 +14,7 @@ labels:
 resources:
   - prometheus.yaml
   - grafana.yaml
+  - alertmanager.yaml # + Mailpit, the local inbox for alert emails (Phase 8b)
 
 # Config files become ConfigMaps. The hash Kustomize adds to each name means
 # that editing rules.yml or the dashboard restarts the pod that uses it.
@@ -21,6 +23,9 @@ configMapGenerator:
     files:
       - prometheus.yml
       - rules.yml
+  - name: alertmanager-config
+    files:
+      - alertmanager.yml
   - name: grafana-datasources
     files:
       - grafana/datasource.yaml

@@ -63,8 +63,36 @@ groups:
             /
           clamp_min(quickserve:orders_placed:per_hour, 1)
 
+      # ----- FinOps: rightsizing (Phase 8b) -----
+      # How much CPU and memory each pod REALLY uses, to compare with what it
+      # RESERVES (its requests). The numbers come from the process metrics that
+      # prometheus_client exports for free in every Python process.
+      # CPU: seconds of CPU per second = cores in use (0.05 = 50m).
+      - record: quickserve:pod_cpu_cores:rate5m
+        expr: sum by (app, pod) (rate(process_cpu_seconds_total{job="quickserve"}[5m]))
+
+      # Memory: resident set size, the RAM the process holds right now.
+      - record: quickserve:pod_memory_bytes
+        expr: sum by (app, pod) (process_resident_memory_bytes{job="quickserve"})
+
+      # Per app, summed over its pods: what the dashboard draws.
+      - record: quickserve:app_cpu_cores:rate5m
+        expr: sum by (app) (quickserve:pod_cpu_cores:rate5m)
+
+      - record: quickserve:app_memory_bytes
+        expr: sum by (app) (quickserve:pod_memory_bytes)
+
   - name: quickserve-alerts
     rules:
+      # Always firing, on purpose. Its email (once a day) proves the whole
+      # alerting chain works. Silence from the Watchdog means monitoring is broken.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Monitoring is working: this alert always fires (the dead man's switch)"
+
       - alert: QuickServeAPIDown
         expr: sum(up{app="api"}) == 0 or absent(up{app="api"})
         for: 2m

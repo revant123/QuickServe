@@ -8,6 +8,13 @@ global:
 rule_files:
   - /etc/prometheus/rules.yml
 
+# Where to send firing alerts (Phase 8b). Alertmanager groups them, silences
+# duplicates and emails people.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   # Find QuickServe's pods through the Kubernetes API instead of listing
   # addresses by hand: pods come and go, and the list updates itself.

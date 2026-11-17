@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes, Terraform, Prometheus, Grafana, GitHub Actions. **126 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes, Terraform, Prometheus, Grafana, GitHub Actions. **140 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
 
 ---
 
@@ -31,6 +31,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
    - [Kubernetes (Phase 7)](#kubernetes-phase-7)
    - [Monitoring (Phase 7b)](#monitoring-phase-7b)
    - [Notifications and the outbox pattern (Phase 8)](#notifications-and-the-outbox-pattern-phase-8)
+   - [Alert emails and rightsizing (Phase 8b: FinOps)](#alert-emails-and-rightsizing-phase-8b-finops)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -124,7 +125,7 @@ python -m app.worker                # terminal 2 (venv active): runs the order t
 |---|---|
 | http://127.0.0.1:8000/health/ready | `{"status":"ready","database":"ok","redis":"ok"}` |
 | http://127.0.0.1:8000/docs | Swagger UI with every endpoint |
-| `pytest -q` (in another terminal, venv active) | `126 passed` |
+| `pytest -q` (in another terminal, venv active) | `140 passed` |
 
 ### Step 9: Place your first order in Swagger
 
@@ -233,6 +234,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| Alert emails and rightsizing (Phase 8b: FinOps) | [Phase 8b Q&A](#alert-emails-and-rightsizing-phase-8b-finops); `infra/k8s/monitoring/alertmanager.yml` + `alertmanager.yaml` (Alertmanager, Mailpit), the Watchdog and rightsizing rules in `rules.yml`, `infra/k8s/rightsizing.py`, `tests/test_rightsizing.py` |
 | Notification service with the outbox pattern (Phase 8) | [Outbox Q&A](#notifications-and-the-outbox-pattern-phase-8); `app/modules/outbox/`, `app/modules/notifications/`, `app/notifier.py`, `infra/k8s/base/notifier.yaml`, `tests/test_notifications.py` |
 | Monitoring and alerts (Phase 7b) | [Monitoring Q&A](#monitoring-phase-7b); `app/core/metrics.py`; `infra/k8s/monitoring/` (Prometheus config, `rules.yml` + `rules_test.yml`, Grafana dashboard); worker `--healthcheck`; `tests/test_metrics.py` |
 | Kubernetes (Phase 7) | [Kubernetes Q&A](#kubernetes-phase-7); `infra/k8s/` (Kustomize base + overlays, `deploy.sh`, `smoke_test.py`); `scripts/wait_for_migrations.py`; the `kubernetes` job in CI (kind cluster, zero-downtime rollout check) |
@@ -252,9 +254,9 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Orders | All-or-nothing placement, itemised bill, price snapshots, status machine with actor rules, cancellation rules, full timeline | Rider assignment, ETA |
 | Payments | Mock gateway, idempotency keys, one-success-per-order rule, refunds on rejection/cancellation | Real gateway, webhooks |
 | Background jobs | A separate worker (`python -m app.worker`) expires unpaid orders and auto-rejects orders the restaurant didn't accept, every 30 seconds; safe to run several (`FOR UPDATE SKIP LOCKED`); graceful shutdown | |
-| Caching, logs and metrics | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses; Prometheus metrics (RED + business), 6 tested alert rules, a Grafana dashboard with cost per order | Alertmanager notifications, tracing |
+| Caching, logs and metrics | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses; Prometheus metrics (RED + business), 6 tested alert rules, a Grafana dashboard with cost per order; Alertmanager emails with grouping, inhibition and a Watchdog; a rightsizing report priced in USD | Tracing, real cost data (OpenCost) |
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
-| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), Kubernetes manifests deployed and tested on a kind cluster in every CI run (rolling update with zero failed requests), liveness/readiness checks, pinned and locked dependencies | Applying the Terraform to a real AWS account, Ingress with HTTPS, Alertmanager |
+| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), Kubernetes manifests deployed and tested on a kind cluster in every CI run (rolling update with zero failed requests), liveness/readiness checks, pinned and locked dependencies | Applying the Terraform to a real AWS account, Ingress with HTTPS |
 
 Everything except browsing restaurants and menus needs a login. Orders belong to the logged-in customer, and who may change an order's status is decided by the login token, never by the request body. See [section 7](#7-login-tokens-and-permissions).
 
@@ -499,7 +501,7 @@ flowchart LR
         pg["Start PostgreSQL 16 and Redis 7 service containers"] --> inst["pip install -r requirements-dev.lock"]
         inst --> lint["ruff check and ruff format --check"]
         lint --> mig["alembic upgrade head and alembic check"]
-        mig --> pyt["pytest: 126 tests"]
+        mig --> pyt["pytest: 140 tests"]
     end
 
     subgraph docker["job: docker"]
@@ -1498,7 +1500,7 @@ Because the autoscaler owns that number. If the Deployment said `replicas: 2`, e
 | postgres | 100m | 256 Mi | 512 Mi |
 | redis | 50m | 64 Mi | 128 Mi |
 
-At the minimum (2 API pods) that's about 0.4 CPU and 830 Mi reserved, which fits a small node with room to spare. The autoscaler's `maxReplicas: 5` is a cost ceiling: a traffic spike or a runaway loop can't keep adding pods forever. Requests set too high waste money; set too low, pods get squeezed or killed. Measuring real use (`kubectl top pods`) and adjusting is called **rightsizing**, and it's a main FinOps job in Phase 8.
+At the minimum (2 API pods) that's about 0.4 CPU and 830 Mi reserved, which fits a small node with room to spare. The autoscaler's `maxReplicas: 5` is a cost ceiling: a traffic spike or a runaway loop can't keep adding pods forever. Requests set too high waste money; set too low, pods get squeezed or killed. Measuring real use (`kubectl top pods`) and adjusting is called **rightsizing**. Phase 8b measures it and prices the difference: see [rightsizing](#q-what-is-rightsizing).
 
 ### Q: How are the pods locked down?
 
@@ -1621,7 +1623,7 @@ quickserve:infra_cost_usd:per_hour = 0.04          # the Phase 6 AWS estimate
 quickserve:cost_per_order_usd:1h   = cost per hour / orders placed in the last hour
 ```
 
-With 240 orders an hour, an order costs USD 0.000167 in infrastructure. With 24 an hour, it costs ten times more, on the same machines. That's why FinOps tracks cost **per order** and not just the monthly bill: a growing bill can be healthy if cost per order falls. The hourly cost is a constant for now. On a real cluster it would come from a cost tool such as **OpenCost**, a CNCF project that splits Kubernetes costs by namespace, workload or pod and exports them to Prometheus [59]. That's Phase 8.
+With 240 orders an hour, an order costs USD 0.000167 in infrastructure. With 24 an hour, it costs ten times more, on the same machines. That's why FinOps tracks cost **per order** and not just the monthly bill: a growing bill can be healthy if cost per order falls. The hourly cost is a constant for now. On a real cluster it would come from a cost tool such as **OpenCost**, a CNCF project that splits Kubernetes costs by namespace, workload or pod and exports them to Prometheus [59]. Phase 8b explains [why it's not used yet](#q-the-cost-per-order-still-uses-a-fixed-004-usd-an-hour-why-not-opencost) and prices pod requests instead.
 
 ### Q: Which alerts are there, and how do you know they work?
 
@@ -1638,7 +1640,7 @@ The `for:` part of each rule means one bad scrape doesn't wake anyone at 3 a.m. 
 
 An alert rule that never fires looks exactly like a healthy system, so the rules have **unit tests**. `rules_test.yml` feeds `promtool test rules` [60] made-up metric history, such as "10 of every 70 requests fail" or "the worker's last success never moves", and checks which alerts fire, when, and with what message. Each alert is also tested in a healthy case where it must stay quiet. CI runs these tests and `promtool check config` on every pull request.
 
-What's missing is **Alertmanager**, which turns a firing alert into a Slack message, an email or a phone call. For now, alerts are visible on Prometheus's **Alerts** page.
+Phase 7b stopped at Prometheus's **Alerts** page. Phase 8b adds **Alertmanager**, which turns a firing alert into an email (and could just as well send a Slack message or a phone call), plus an always-firing `Watchdog` alert. See [Alert emails and rightsizing](#alert-emails-and-rightsizing-phase-8b-finops).
 
 ### Q: How does the worker's heartbeat work?
 
@@ -1666,8 +1668,8 @@ The trade-off is that metrics live on the pod's own disk (`emptyDir`) and vanish
    - Was the login from the smoke test counted?
    - Is the worker heartbeat fresh?
    - Do the recording rules produce numbers?
-   - Is any alert firing? (None may be.)
-3. It asks Grafana whether the QuickServe dashboard loaded (25 panels, including the notifications row from Phase 8).
+   - Is any alert firing? (None may be, apart from the always-on `Watchdog`.)
+3. It asks Grafana whether the QuickServe dashboard loaded (28 panels, including the notifications row from Phase 8 and the rightsizing row from Phase 8b).
 4. It checks that the worker's liveness probe never restarted it.
 
 ### Notifications and the outbox pattern (Phase 8)
@@ -1806,6 +1808,164 @@ With the app running (Docker Compose, minikube or `uvicorn` plus `python -m app.
 3. Log in as `owner@quickserve.dev`: "New order: ₹…" is waiting.
 4. Stop the notifier (`docker stop quickserve-notifier`, or `kubectl -n quickserve scale deploy/notifier --replicas=0`). Place another order: no notification appears. Then start the notifier again: the waiting events are delivered. Nothing was lost.
 
+### Alert emails and rightsizing (Phase 8b: FinOps)
+
+Phase 7b could detect problems, but nobody was told: alerts only showed on Prometheus's **Alerts** page. Phase 8b adds the missing link, **Alertmanager**, which turns firing alerts into emails, plus a local inbox (**Mailpit**) to read them. The FinOps half answers a question every cloud bill raises: *do the pods really need what they reserve?*
+
+```mermaid
+flowchart LR
+    prom["Prometheus: evaluates rules.yml every 15 s"] -->|"firing alerts"| am["Alertmanager: group, inhibit, route, repeat"]
+    am -->|"SMTP"| mp["Mailpit: test inbox (port-forward :8026)"]
+    prom --> rs["Recording rules: CPU and memory per pod"]
+    rs --> graf["Grafana: Rightsizing row"]
+    rs --> script["rightsizing.py: requested vs used, in USD"]
+```
+
+### Q: How do I see the alert emails?
+
+After `infra/k8s/deploy.sh` (run each line on its own):
+
+```bash
+kubectl -n quickserve port-forward service/mailpit 8026:8025       # http://127.0.0.1:8026
+kubectl -n quickserve port-forward service/alertmanager 9096:9093  # http://127.0.0.1:9096 (optional)
+```
+
+Port **8026**, not 8025: QuickKart's own Mailpit already uses 8025 on your Mac. Within a minute of the deploy, the inbox has an email called **"[FIRING:1] Watchdog (none)"**. That one is good news (see below). To see a real alert, stop the API:
+
+```bash
+kubectl -n quickserve scale deployment/api --replicas=0
+```
+
+After about 2 minutes, `QuickServeAPIDown` fires and an email arrives. Put it back with `kubectl -n quickserve scale deployment/api --replicas=2`, and a **[RESOLVED]** email follows, because `send_resolved: true` is set.
+
+### Q: Prometheus already knows an alert is firing. Why is Alertmanager a separate program?
+
+Because deciding *something is wrong* and deciding *who hears about it, how often* are different jobs. Prometheus evaluates rules; Alertmanager deduplicates, groups and routes the alerts, and also handles silencing and inhibition [65]. With several Prometheus servers (one per cluster, or two for redundancy), they all send to the same Alertmanager, which removes the duplicates. Prometheus's docs also warn not to put a load balancer between Prometheus and its Alertmanagers. Point Prometheus at all of them instead [65].
+
+In QuickServe this is three lines in `prometheus.yml` (`alerting: alertmanagers: alertmanager:9093`) and one file, [`alertmanager.yml`](infra/k8s/monitoring/alertmanager.yml).
+
+### Q: What do `group_by`, `group_wait`, `group_interval` and `repeat_interval` do?
+
+They decide how many emails a bad night produces. This matters more than it sounds, because a pager that rings all the time gets ignored.
+
+| Setting | QuickServe value | Meaning |
+|---|---|---|
+| `group_by: [alertname]` | per alert name | If 5 API pods fail the same check, that's **one** email listing 5, not 5 emails |
+| `group_wait` | 30 s | Wait 30 s after the first alert of a new group, so its neighbours arrive in the same email |
+| `group_interval` | 5 min | If a group already emailed and gains a new alert, wait at least 5 min before the update |
+| `repeat_interval` | 4 h (critical: 1 h) | Something still broken is re-sent, but not every few minutes |
+
+Critical alerts get their own **route** with a 1-hour repeat. Routes are a tree: an alert walks down it and the first matching branch decides the receiver and timings. A real team would send `critical` to PagerDuty and `warning` to Slack. Here everything goes to one email address, because the point is to see the mechanics.
+
+### Q: What is inhibition?
+
+Muting alerts that are only *symptoms* of another alert that's already firing. If every API pod is down, error rate and latency are meaningless, and three emails about one problem is noise. So `alertmanager.yml` says:
+
+- while `QuickServeAPIDown` fires, don't send `QuickServeHighErrorRate` or `QuickServeSlowResponses`;
+- while `QuickServeNotifierDown` fires, don't send `QuickServeNotificationsDelayed` (of course notifications are delayed: nothing is delivering them).
+
+This was tested before merging: with both API-down and high-error-rate alerts active, Alertmanager marked the error-rate alert `suppressed, inhibited by` the API-down one, and only the API-down email was sent.
+
+Inhibition is different from a **silence**. A silence is a person muting matching alerts for a fixed time, from the Alertmanager page or API, for example during planned maintenance [65]. It's temporary and manual; inhibition is permanent config tied to another alert. Silence an alert; don't delete the rule, or you lose it for good.
+
+### Q: Why is there an alert that is always firing?
+
+That's the **Watchdog**, also called a *dead man's switch*. Its expression is `vector(1)`, which is always true. If Prometheus, the rules, Alertmanager or email delivery break, the problem isn't "an alert fires". It's that **no** alert can fire, and silence looks exactly like a healthy system. The Watchdog turns silence into a signal. The prometheus-operator runbook describes it as an alert that checks the whole alerting pipeline works, so it should always be firing in Alertmanager and always reach a receiver [66].
+
+Our Watchdog email repeats once a day. Honest caveat: in this project it lands in the same inbox as everything else, so a person has to notice it's *missing*. In production it goes to an outside service such as Dead Man's Snitch or Healthchecks.io, which pages you when the daily email *doesn't* arrive [67]. The smoke test treats it as the normal case: "no alerts firing" now means "none apart from the Watchdog".
+
+### Q: What is Mailpit, and why not a real email address?
+
+Mailpit is a fake mail server: it accepts SMTP on port 1025 and shows every message in a web page, but never sends anything outside the cluster. You can see real alert emails without an email account, passwords in the config, or spam filters. Changing `alertmanager.yml` to Gmail, Slack or PagerDuty is a config change; the routing and inhibition stay the same.
+
+It's locked down like everything else (no privilege escalation, all Linux capabilities dropped, small requests) and keeps at most 500 emails, so its memory can't grow forever.
+
+### Q: What is rightsizing?
+
+Setting each pod's **requests** to what it really uses, plus some headroom. Phase 7 explained that requests are what the scheduler reserves, used or not, and that requests decide how many nodes you need [52]. The guesses in the manifests (API 100m CPU / 192 Mi, worker 50m / 128 Mi, notifier 25m / 128 Mi) were deliberately generous. Rightsizing replaces guesses with measurements.
+
+Some platforms make the link to money direct. **AWS Fargate bills the vCPU and memory a task asks for**, from start to stop, however much it actually uses: USD 0.04048 per vCPU-hour and USD 0.004445 per GB-hour on Linux/x86 in us-east-1, about 20% less on ARM (Graviton) [68][69]. On your own nodes the effect is indirect but the same: over-asking means more nodes.
+
+### Q: Where do the "used" numbers come from?
+
+Every Python process using `prometheus_client` exports `process_cpu_seconds_total` and `process_resident_memory_bytes` for free. QuickServe already exposes them on its metrics ports. Four recording rules in `rules.yml` turn them into per-pod and per-app numbers:
+
+```yaml
+- record: quickserve:pod_cpu_cores:rate5m   # CPU-seconds per second = cores in use; 0.05 = 50m
+  expr: sum by (app, pod) (rate(process_cpu_seconds_total{job="quickserve"}[5m]))
+- record: quickserve:pod_memory_bytes        # resident memory right now
+  expr: sum by (app, pod) (process_resident_memory_bytes{job="quickserve"})
+```
+
+They are unit-tested with promtool like the alerts: two fake API pods each burning 1.8 CPU-seconds a minute must show 0.03 cores (30m) each, and 0.06 for the app.
+
+On a real cluster you'd use **cAdvisor** (built into the kubelet) for container usage and **kube-state-metrics** for requests, which covers every pod, PostgreSQL included. Process metrics only cover our own Python pods, but need no extra components or cluster-wide permissions, and they're enough to learn the method.
+
+### Q: How do I run the rightsizing report?
+
+```bash
+python3 infra/k8s/rightsizing.py              # the last hour
+python3 infra/k8s/rightsizing.py --window 7d  # the window you'd really decide on
+```
+
+It needs only `kubectl`. It reads the requests from the live Deployments and asks Prometheus through the Kubernetes API server's service proxy (`kubectl get --raw /api/v1/namespaces/quickserve/services/prometheus:web/proxy/...`), so no port-forward is needed [70]. Output from a test run (yours will differ):
+
+```
+app       pods  CPU req  CPU p95  CPU peak  -> CPU  MEM req  MEM peak  -> MEM
+api          2     100m      18m       19m     25m    192Mi      83Mi   112Mi
+notifier     1      25m       3m        3m     10m    128Mi      53Mi    80Mi
+worker       1      50m       4m        4m     10m    128Mi      43Mi    64Mi
+
+Reserved but unused (all pods): 0.23 vCPU of 0.28, 0.37 GiB of 0.62.
+Priced per request (AWS Fargate, ARM, us-east-1): $8.12/month now, $2.59/month with the recommended requests (-68%).
+```
+
+The Grafana dashboard has a new **Rightsizing** row with the same CPU and memory per pod over time.
+
+### Q: Why is CPU sized from p95 but memory from the peak?
+
+Because they fail differently:
+
+- **CPU is compressible.** A pod that needs more CPU than its request gets less of it: it slows down, it doesn't die. Sizing for the p95 (the busiest 5% of moments excluded) and letting the limit absorb rare spikes is a sensible trade.
+- **Memory isn't.** A container that goes over its memory limit is killed (OOMKilled) and restarted [52]. One spike is enough. So memory is sized from the **highest** value seen.
+
+Both get 25% headroom, are rounded up (CPU to 5m, memory to 16 Mi), and never go below a floor (10m, 64 Mi) where the numbers are mostly noise.
+
+### Q: The report says I can save 68%. Should I change the requests now?
+
+**No.** This is the most important FinOps lesson in the phase. An hour of an idle minikube with a few test orders says nothing about the dinner rush. Shrink the requests on that basis, and Friday at 8 pm the API pods are throttled and slow, the autoscaler panics, and pods get OOMKilled. The report says so itself when it has less than a day of data.
+
+The right process:
+
+1. Measure over at least a week that includes your busiest hours.
+2. Change one service at a time, in the manifests in `infra/k8s/base/`. The files are the source of truth, so a `kubectl set resources` would be undone by the next deploy.
+3. Watch latency, restarts and throttling after the change, and be ready to roll back.
+
+So the manifests in this PR keep their original requests on purpose. The value is the method and the tool, not today's numbers.
+
+### Q: Doesn't Kubernetes do this automatically?
+
+Partly. The **Vertical Pod Autoscaler (VPA)** watches usage and adjusts requests from history [71]. It's not part of core Kubernetes; it's an add-on with its own components. Teams often start it in recommendation-only mode (`updateMode: "Off"`), which suggests values without restarting anything. That's exactly what `rightsizing.py` does by hand, which makes it a good way to understand what VPA computes. One caution: VPA and the HPA shouldn't both react to the same CPU metric, because they'd fight. Our API scales on CPU with the HPA, so its requests would be rightsized by hand.
+
+### Q: The cost per order still uses a fixed 0.04 USD an hour. Why not OpenCost?
+
+**OpenCost** (a CNCF project) splits a cluster's real bill across namespaces, deployments and pods, and exports it to Prometheus [59]. That's the next step once QuickServe runs on a cloud cluster with real prices. On minikube there's no bill to split: the "cost" is your laptop, and the numbers would be invented. OpenCost also needs cluster-wide permissions and its own Prometheus queries, which is a lot of setup for a constant. For now, the honest approach is to price **requests** with a public list price (the Fargate rates above) and keep the per-hour constant clearly labelled as an estimate.
+
+### Q: What does CI check now?
+
+On top of everything from Phase 7b:
+
+1. `amtool check-config alertmanager.yml`, next to the Prometheus checks.
+2. A new promtool test for the Watchdog and one for the rightsizing rules.
+3. On the kind cluster, the monitoring check also confirms:
+   - Prometheus has discovered Alertmanager;
+   - the rightsizing rules see all three apps;
+   - the Watchdog reached Alertmanager (its API at `/api/v2/alerts`);
+   - the Watchdog **email** reached Mailpit (`/api/v1/messages`).
+
+   That last one tests the whole chain: rule → Prometheus → Alertmanager → SMTP → inbox.
+4. A new step runs `rightsizing.py` against the live cluster, so the report can't silently break.
+
 ---
 
 ## 9. DevOps already in the project
@@ -1828,7 +1988,7 @@ PostgreSQL 16 and Redis 7 always, the same major versions as CI and, later, AWS.
 | `ruff check` and `ruff format --check` | Style arguments end; obvious bugs (unused imports, shadowed names) caught before review |
 | `alembic upgrade head` + `alembic check` | **Fails if someone changed a model but forgot to create a migration**, a very common production incident |
 | PostgreSQL 16 and Redis 7 **service containers** | Tests run against the same database and cache as production |
-| `pytest` | All 126 tests, including the concurrency, login-attack and Redis-outage tests |
+| `pytest` | All 140 tests, including the concurrency, login-attack and Redis-outage tests |
 | `concurrency: cancel-in-progress` | Two quick pushes cancel the older run instead of paying for both |
 | `timeout-minutes: 10` | A hung job can't burn CI minutes forever |
 | A second job, `docker`, in parallel | Builds the image and smoke-tests the whole stack in containers ([details](#q-what-does-the-ci-docker-job-prove-that-the-tests-dont)) |
@@ -1898,7 +2058,7 @@ Now compare it with revenue per order. Real platforms charge a flat platform fee
 - **Does cost grow slower than orders?** If orders double and cost per order falls, the system scales efficiently. If cost per order climbs, something is wasteful.
 - **Which component dominates?** Usually the database, then compute, then logs and data transfer.
 
-We'll measure this for real in Phase 8, first on one EC2 instance and then on Kubernetes. For a small app the single instance usually wins on cost, and seeing that with your own numbers is the lesson.
+The dashboard already shows it live (Phase 7b), and Phase 8b prices what each pod reserves against what it uses. Measuring it with real AWS prices comes when the Phase 6 Terraform is applied. For a small app the single instance usually wins on cost, and seeing that with your own numbers is the lesson.
 
 ### Q: How does the inventory design connect to FinOps?
 
@@ -1950,6 +2110,10 @@ Explaining the cycle data this way shows you understand FinOps as a way of think
 | minikube and kind for learning Kubernetes | A real cluster for USD 0; a managed control plane bills by the hour |
 | Metrics labelled by route template, no IDs; scrape every 15 s; keep 2 days / 1 GB | Managed Prometheus bills per sample [57]; fewer series, fewer samples |
 | Cost per order on the dashboard | The unit metric is visible to everyone, not hidden in a spreadsheet |
+| Rightsizing report: requests vs measured use, priced at Fargate's per-request rates | Shows reserved-but-idle capacity in dollars; recommends CPU from p95 and memory from the peak |
+| Requests NOT shrunk from an idle hour of data | Cheap today, outage on Friday night; size from a week that includes the busiest hours |
+| Alerts grouped and inhibited, repeats every 4 h (critical 1 h) | Fewer, better notifications; paging tools often bill per user or per notification |
+| Alertmanager and Mailpit at 10m CPU / 32 Mi each, Mailpit capped at 500 emails | The alerting stack costs almost nothing and can't grow without bound |
 | Limits on every container in Compose (API 1 CPU / 512 MB, worker 0.5 CPU / 256 MB) | First guesses for the Kubernetes requests and limits that decide node count in Phase 7 |
 
 ### Q: How do I avoid a surprise AWS bill?
@@ -2020,10 +2184,12 @@ quickserve/
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        126 tests, real PostgreSQL and Redis
+├── tests/                        140 tests, real PostgreSQL and Redis
 ├── infra/                        Terraform for AWS (Phase 6); start with infra/README.md
-│   ├── k8s/                      Kubernetes (Phase 7): base/ manifests, overlays/local and ci, deploy.sh
-│   │   └── monitoring/           Prometheus config, alert rules + their tests, Grafana dashboard (Phase 7b)
+│   ├── k8s/                      Kubernetes (Phase 7): base/ manifests, overlays/local and ci, deploy.sh,
+│   │                             smoke_test.py, rightsizing.py (Phase 8b: requests vs real use)
+│   │   └── monitoring/           Prometheus config, alert rules + their tests, Grafana dashboard (Phase 7b),
+│   │                             Alertmanager + Mailpit (Phase 8b)
 │   ├── bootstrap/                budget alert + S3 state bucket, once per account
 │   ├── envs/dev/                 network, database, secrets, app server (+ tests/)
 │   └── modules/                  budget, network, database, app_server (each with tests/)
@@ -2085,7 +2251,8 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **7. Kubernetes** (done) | Kustomize manifests for minikube: Deployments, StatefulSet, Services, migration Job with wait-for-migrations init containers, ConfigMap and Secret, HPA, PDB, probes wired to `/health` and `/health/ready`, locked-down pods; CI deploys to kind and checks a zero-downtime rollout and self-healing | Requests vs limits, liveness vs readiness, rolling updates, what happens when a pod dies |
 | **7b. Monitoring** (done) | Prometheus metrics on a private port (RED + business + worker heartbeat), counters that move only after commit, Prometheus with recording and alert rules (unit-tested with promtool), a Grafana dashboard with cost per order, CI that checks scraping, alerts and the dashboard | The four golden signals, percentiles, cardinality, alert fatigue, unit metrics |
 | **8. Notification service** (done) | Transactional outbox written with every order change, a separate notifier process (own Deployment, metrics, liveness, alerts) that turns events into notifications: per-order ordering, retries with backoff, dead letters, idempotent consumer, retention; notifications API | Dual writes, the outbox pattern, at-least-once delivery, idempotency, poison messages, event-carried state |
-| **8b. FinOps** (next) | OpenCost feeding real cost into the cost-per-order panel, rightsizing requests from measured use, Alertmanager sending alert emails | Unit economics, showback, rightsizing |
+| **8b. FinOps and alerting** (done) | Alertmanager with routing, grouping, inhibition and a Watchdog, emailing a Mailpit inbox; CPU and memory recording rules per pod; a rightsizing report that prices requests vs real use in USD; a Grafana rightsizing row; CI checks the whole alert-to-email chain | Alert fatigue, dead man's switch, compressible vs incompressible resources, rightsizing, VPA |
+| **9. Next** (your choice) | Ingress with HTTPS; OpenCost on a real cloud cluster; tracing with OpenTelemetry; or applying the Phase 6 Terraform for a real deploy | |
 
 ---
 
@@ -2136,6 +2303,10 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 **What's graceful shutdown?** Handle `SIGTERM`, finish the current unit of work, then exit before the orchestrator sends `SIGKILL`.
 
 **Why request IDs?** One ID ties together every log line from one request across modules and services, and users can quote it when reporting a problem.
+
+**How do you stop alert fatigue?** Alert on symptoms customers feel, add a `for:` duration, group related alerts into one notification, inhibit symptoms while their cause is firing, repeat slowly, and silence (don't delete) alerts during maintenance. Plus a Watchdog, an always-firing alert, so a broken alerting pipeline is noticed.
+
+**How do you rightsize a pod?** Measure real usage over a representative period (a week with peak hours). Set the CPU request from a high percentile, because CPU is compressible (throttled, not killed), and the memory request from the peak, because a pod over its memory limit is OOMKilled. Add headroom, change one service at a time, and watch latency and restarts. VPA in recommendation mode automates the measuring.
 
 **What's unit economics in FinOps?** Cost per unit of business value. For us: infrastructure cost per completed order, tracked as orders grow.
 
@@ -2209,3 +2380,10 @@ Business and tax figures change often; the dates show when each was reported.
 62. Chris Richardson, *Pattern: Idempotent Consumer*, microservices.io (at-least-once delivery means a handler can run more than once for the same message). https://microservices.io/patterns/communication-style/idempotent-consumer.html
 63. PostgreSQL documentation, *SELECT: the locking clause* (SKIP LOCKED for queue-like tables with multiple consumers). https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE
 64. Debezium documentation, *Outbox Event Router* (CDC-based outbox relay to Kafka). https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html
+65. Prometheus documentation, *Alertmanager* (deduplication, grouping, routing, silences and inhibition; point Prometheus at all Alertmanagers, don't load-balance). https://prometheus.io/docs/alerting/latest/alertmanager/ and *Configuration*: https://prometheus.io/docs/alerting/latest/configuration/
+66. prometheus-operator runbooks, *Watchdog* (an always-firing alert that checks the entire alerting pipeline). https://runbooks.prometheus-operator.dev/runbooks/general/watchdog
+67. PromLabs training, *End-to-End Watchdog Alerts* (dead man's switch; an external service notices when the notifications stop). https://training.promlabs.com/training/monitoring-and-debugging-prometheus/metrics-based-meta-monitoring/end-to-end-watchdog-alerts/
+68. AWS, *AWS Fargate pricing* (billed per vCPU-hour and GB-hour requested; Linux/x86 USD 0.04048 and USD 0.004445 in us-east-1; Linux/ARM USD 0.03238 and USD 0.00356). https://aws.amazon.com/fargate/pricing/
+69. OpsLyft, *AWS Fargate pricing calculator* (October 2026 us-east-1 rates; memory billed as allocated, not used; ARM about 20% lower). https://www.opslyft.com/blog/aws-fargate-pricing-calculator
+70. Kubernetes documentation, *Proxying traffic to services* (the API server's `/api/v1/namespaces/<ns>/services/<name>:<port>/proxy` URL). https://kubectl.docs.kubernetes.io/guides/container_debugging/proxying_traffic_to_services/
+71. Kubernetes documentation, *Vertical Pod Autoscaling* (adjusts requests from historical usage). https://kubernetes.io/docs/concepts/workloads/autoscaling/vertical-pod-autoscale/

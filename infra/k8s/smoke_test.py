@@ -13,7 +13,8 @@ watch N     hit /health/ready 5 times a second for N seconds and count failures.
             Run it during `kubectl rollout restart deployment/api`: 0 failures
             means the rolling update caused no downtime.
 monitoring  Prometheus scrapes every API and worker pod, has seen the login
-            from `check`, fires no alerts; Grafana has loaded the dashboard.
+            from `check`, fires no alerts; Grafana has loaded the dashboard;
+            the Watchdog alert went Prometheus -> Alertmanager -> email (Mailpit).
 """
 
 import json
@@ -97,6 +98,21 @@ def prom(query):
         return json.loads(resp.read())["data"]["result"]
 
 
+def get_json(url):
+    with urllib.request.urlopen(url, timeout=5) as resp:
+        return json.loads(resp.read())
+
+
+def watchdog_in_alertmanager():
+    alerts = get_json("http://alertmanager:9093/api/v2/alerts")
+    return any(a["labels"].get("alertname") == "Watchdog" for a in alerts)
+
+
+def watchdog_emailed():
+    inbox = get_json("http://mailpit:8025/api/v1/messages")
+    return any("Watchdog" in (m.get("Subject") or "") for m in inbox.get("messages") or [])
+
+
 def monitoring(timeout=120):
     deadline = time.monotonic() + timeout
     checks = {
@@ -105,13 +121,18 @@ def monitoring(timeout=120):
         "the login from `check` was counted": 'sum(quickserve_logins_total{outcome="success"}) >= 1',
         "the worker heartbeat is fresh": "time() - max(quickserve_worker_last_run_timestamp_seconds) < 120",
         "the recording rules run": "quickserve:infra_cost_usd:per_hour",
+        "the rightsizing rules see every app's CPU and memory": "count(quickserve:app_memory_bytes) >= 3",
+        "Prometheus sends alerts to Alertmanager": "prometheus_notifications_alertmanagers_discovered >= 1",
+        # The end of the chain: two HTTP checks, not PromQL.
+        "alertmanager: the Watchdog arrived": watchdog_in_alertmanager,
+        "mailpit: the Watchdog email arrived": watchdog_emailed,
     }
     pending = dict(checks)
     while pending and time.monotonic() < deadline:
         for name, query in list(pending.items()):
             try:
-                if prom(query):
-                    print("prometheus:", name)
+                if query() if callable(query) else prom(query):
+                    print(name if callable(query) else f"prometheus: {name}")
                     del pending[name]
             except (urllib.error.URLError, OSError):
                 pass  # Prometheus still starting
@@ -119,9 +140,10 @@ def monitoring(timeout=120):
             time.sleep(5)
     assert not pending, f"not seen within {timeout}s: {list(pending)}"
 
-    firing = prom('ALERTS{alertstate="firing"}')
+    # The Watchdog always fires on purpose; anything else firing is a problem.
+    firing = prom('ALERTS{alertstate="firing", alertname!="Watchdog"}')
     assert not firing, f"alerts firing: {firing}"
-    print("prometheus: no alerts firing")
+    print("prometheus: no alerts firing (apart from the Watchdog)")
 
     with urllib.request.urlopen("http://grafana:3000/api/dashboards/uid/quickserve-overview", timeout=5) as resp:
         dash = json.loads(resp.read())["dashboard"]

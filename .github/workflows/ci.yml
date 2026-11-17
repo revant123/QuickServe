@@ -263,12 +263,14 @@ jobs:
             kubectl kustomize "infra/k8s/overlays/$overlay" | ./kubeconform -strict -summary -
           done
 
-      - name: Check the Prometheus config and unit-test the alert rules
+      - name: Check the Prometheus and Alertmanager configs, unit-test the rules
         run: |
           docker run --rm -v "$PWD/infra/k8s/monitoring:/etc/prometheus:ro" --entrypoint promtool \
             prom/prometheus:v3.16.0 check config /etc/prometheus/prometheus.yml
           docker run --rm -v "$PWD/infra/k8s/monitoring:/etc/prometheus:ro" -w /etc/prometheus --entrypoint promtool \
             prom/prometheus:v3.16.0 test rules rules_test.yml
+          docker run --rm -v "$PWD/infra/k8s/monitoring:/etc/alertmanager:ro" --entrypoint amtool \
+            prom/alertmanager:v0.35.0 check-config /etc/alertmanager/alertmanager.yml
 
       - name: Build this commit's image
         run: docker build -t quickserve:ci .
@@ -307,16 +309,25 @@ jobs:
           kubectl -n $NS rollout status deployment/api --timeout=120s
           kubectl -n $NS exec -i deploy/worker -- python - check < infra/k8s/smoke_test.py
 
-      - name: Monitoring - Prometheus scrapes the pods, Grafana has the dashboard
+      - name: Monitoring - Prometheus scrapes the pods, Grafana has the dashboard, alerts reach email
         run: |
           kubectl -n $NS exec -i deploy/worker -- python - monitoring < infra/k8s/smoke_test.py
           # The worker's liveness probe (its heartbeat) never had to restart it.
           test "$(kubectl -n $NS get pods -l app.kubernetes.io/name=worker -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}')" = "0"
+
+      - name: FinOps - rightsizing report (requests vs real usage)
+        run: |
+          # Retried a few times: the CPU numbers need a few scrapes before they exist.
+          for attempt in 1 2 3 4 5 6; do
+            python3 infra/k8s/rightsizing.py --window 15m && exit 0
+            sleep 20
+          done
+          exit 1
 
       - name: Show the cluster if something failed
         if: failure()
         run: |
           kubectl -n $NS get all,pvc,events --sort-by=.metadata.creationTimestamp || true
           kubectl -n $NS describe pods || true
-          for d in api worker prometheus grafana; do kubectl -n $NS logs deploy/$d --all-containers --tail=100 || true; done
+          for d in api worker notifier prometheus grafana alertmanager mailpit; do kubectl -n $NS logs deploy/$d --all-containers --tail=100 || true; done
           kubectl -n $NS logs job/migrate --tail=100 || true

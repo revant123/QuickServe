@@ -1,0 +1,47 @@
+# Alertmanager: turns Prometheus's firing alerts into notifications for people.
+# Prometheus decides WHAT is wrong; Alertmanager decides WHO hears about it,
+# HOW OFTEN, and WHAT TO KEEP QUIET. Checked in CI with `amtool check-config`.
+#
+# Locally the emails go to Mailpit, a fake inbox you open in the browser
+# (port-forward 8026). On a real setup this would be Slack, PagerDuty or a real
+# mail server; only the receiver block changes.
+global:
+  smtp_smarthost: mailpit:1025
+  smtp_from: alerts@quickserve.local
+  smtp_require_tls: false # Mailpit is a local test inbox; a real server needs TLS
+
+route:
+  receiver: team-email
+  # One email per alert NAME, not one per pod: if 3 API pods fail together,
+  # that's one "API down" email, not three.
+  group_by: [alertname]
+  group_wait: 30s # wait a little so related alerts arrive in the same email
+  group_interval: 5m # new alerts for an already-notified group wait this long
+  repeat_interval: 4h # still broken? remind every 4 hours, not every minute
+  routes:
+    # Critical alerts repeat more often: someone must act.
+    - matchers: ['severity="critical"']
+      receiver: team-email
+      repeat_interval: 1h
+    # The Watchdog always fires. Its daily email proves the whole chain works:
+    # Prometheus -> rules -> Alertmanager -> email. If it STOPS arriving, the
+    # monitoring itself is broken (the "dead man's switch").
+    - matchers: ['alertname="Watchdog"']
+      receiver: team-email
+      group_wait: 10s
+      repeat_interval: 24h
+
+# Don't send the symptoms when the cause is already alerting.
+inhibit_rules:
+  # The API is down: "errors" and "slow" are just consequences.
+  - source_matchers: ['alertname="QuickServeAPIDown"']
+    target_matchers: ['alertname=~"QuickServeHighErrorRate|QuickServeSlowResponses"']
+  # The notifier is down: of course notifications are delayed.
+  - source_matchers: ['alertname="QuickServeNotifierDown"']
+    target_matchers: ['alertname="QuickServeNotificationsDelayed"']
+
+receivers:
+  - name: team-email
+    email_configs:
+      - to: oncall@quickserve.local
+        send_resolved: true # also say when it's fixed
