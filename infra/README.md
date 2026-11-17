@@ -1,6 +1,6 @@
 # QuickServe on AWS (Phase 6)
 
-This folder holds the Terraform code that builds QuickServe on AWS. **Nothing here runs by itself, and nothing has been created in AWS yet.** CI only checks the code, using fake ("mock") AWS, so it costs nothing.
+This folder holds the Terraform code that builds QuickServe on AWS. (The Kubernetes manifests in `k8s/` are separate: see "Kubernetes (Phase 7)" in the main README.) **Nothing here runs by itself, and nothing has been created in AWS yet.** CI only checks the code, using fake ("mock") AWS, so it costs nothing.
 
 The main README explains *why* it's built this way (section "AWS and Terraform (Phase 6)"). This file covers what gets built, what it costs, and the exact steps to deploy it and tear it down.
 

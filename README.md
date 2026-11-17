@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, GitHub Actions. **81 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes, Terraform, GitHub Actions. **86 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
 
 ---
 
@@ -28,6 +28,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
 8. [Redis, the background worker and logs (Phase 4)](#8-redis-the-background-worker-and-logs-phase-4)
    - [Docker: the app in containers (Phase 5)](#docker-the-app-in-containers-phase-5)
    - [AWS and Terraform (Phase 6)](#aws-and-terraform-phase-6)
+   - [Kubernetes (Phase 7)](#kubernetes-phase-7)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -121,7 +122,7 @@ python -m app.worker                # terminal 2 (venv active): runs the order t
 |---|---|
 | http://127.0.0.1:8000/health/ready | `{"status":"ready","database":"ok","redis":"ok"}` |
 | http://127.0.0.1:8000/docs | Swagger UI with every endpoint |
-| `pytest -q` (in another terminal, venv active) | `81 passed` |
+| `pytest -q` (in another terminal, venv active) | `86 passed` |
 
 ### Step 9: Place your first order in Swagger
 
@@ -229,6 +230,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| Kubernetes (Phase 7) | [Kubernetes Q&A](#kubernetes-phase-7); `infra/k8s/` (Kustomize base + overlays, `deploy.sh`, `smoke_test.py`); `scripts/wait_for_migrations.py`; the `kubernetes` job in CI (kind cluster, zero-downtime rollout check) |
 | AWS infrastructure as code (Phase 6) | [AWS and Terraform Q&A](#aws-and-terraform-phase-6); `infra/` with [infra/README.md](infra/README.md); 18 `terraform test` checks; the `terraform` job in CI |
 | Image published to a registry (Phase 5b) | [Registry Q&A](#q-where-does-the-image-go-after-ci-builds-it); the `publish` job in `.github/workflows/ci.yml`; `ghcr.io/revant123/quickserve` |
 | Dockerfile and the whole stack in Docker (Phase 5) | [Docker Q&A](#docker-the-app-in-containers-phase-5); `Dockerfile`, `.dockerignore`, `docker-compose.yml` (profile `app`), `requirements.lock`, [docs/docker.md](docs/docker.md), the `docker` job in CI |
@@ -247,7 +249,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Background jobs | A separate worker (`python -m app.worker`) expires unpaid orders and auto-rejects orders the restaurant didn't accept, every 30 seconds; safe to run several (`FOR UPDATE SKIP LOCKED`); graceful shutdown | |
 | Caching and logs | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses | Metrics and dashboards (Phase 7) |
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
-| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), liveness/readiness checks, pinned and locked dependencies | Applying the Terraform to a real AWS account, Kubernetes |
+| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), Kubernetes manifests deployed and tested on a kind cluster in every CI run (rolling update with zero failed requests), liveness/readiness checks, pinned and locked dependencies | Applying the Terraform to a real AWS account, Ingress with HTTPS, metrics and dashboards |
 
 Everything except browsing restaurants and menus needs a login. Orders belong to the logged-in customer, and who may change an order's status is decided by the login token, never by the request body. See [section 7](#7-login-tokens-and-permissions).
 
@@ -478,7 +480,7 @@ flowchart LR
 
 ### 3.7 CI pipeline (runs on every push and pull request)
 
-`test`, `docker` and `terraform` run side by side, so new jobs don't make CI slower. `publish` waits for `test` and `docker`.
+`test`, `docker`, `terraform` and `kubernetes` run side by side, so new jobs don't make CI slower. `publish` waits for `test` and `docker`.
 
 ```mermaid
 flowchart LR
@@ -489,7 +491,7 @@ flowchart LR
         pg["Start PostgreSQL 16 and Redis 7 service containers"] --> inst["pip install -r requirements-dev.lock"]
         inst --> lint["ruff check and ruff format --check"]
         lint --> mig["alembic upgrade head and alembic check"]
-        mig --> pyt["pytest: 81 tests"]
+        mig --> pyt["pytest: 86 tests"]
     end
 
     subgraph docker["job: docker"]
@@ -513,6 +515,16 @@ flowchart LR
     subgraph terraform["job: terraform (no AWS account needed)"]
         tf["terraform fmt -check"] --> val["init -backend=false and validate, every stack and module"]
         val --> tftest["terraform test: 18 checks with mock AWS"]
+    end
+
+    push3["git push or pull request"] --> kc
+
+    subgraph kubernetes["job: kubernetes (throwaway kind cluster)"]
+        kc["kubeconform: manifests match the API schema"] --> kb["build image, create kind cluster, load image"]
+        kb --> kd["deploy.sh: postgres, redis, migrate Job, api, worker"]
+        kd --> ks["seed, log in, non-root check"]
+        ks --> kr["rolling restart: zero failed requests"]
+        kr --> kh["delete a pod: replaced, still answering"]
     end
 ```
 
@@ -1320,6 +1332,168 @@ That's roughly **USD 30 a month if forgotten**, or about **USD 0.15 for a 3-hour
 
 `aws login` (AWS CLI 2.32 or newer) reuses your console sign-in and gives the CLI short-lived credentials that rotate automatically, so there's no long-lived access key saved on your Mac to leak [45]. The exact commands are in [infra/README.md](infra/README.md).
 
+### Kubernetes (Phase 7)
+
+The manifests are in [`infra/k8s/`](infra/k8s/). The same YAML runs on **minikube** on your Mac and on a throwaway **kind** cluster in CI, where every pull request deploys the app, tests it, restarts it and kills a pod on purpose.
+
+```mermaid
+flowchart LR
+    you["Your browser"] -->|"kubectl port-forward :8003"| svc
+
+    subgraph ns["namespace: quickserve"]
+        svc["Service api"] --> a1["api pod"]
+        svc --> a2["api pod"]
+        hpa["HorizontalPodAutoscaler: 2 to 5 pods"] -.-> a1
+        job["Job migrate: alembic upgrade head"] --> pg
+        a1 --> pg[("StatefulSet postgres + its own disk")]
+        a2 --> pg
+        a1 --> rd[("Deployment redis")]
+        w["worker pod"] --> pg
+        w --> rd
+        cm["ConfigMap app-config + Secret app-secrets"] -.-> a1
+        cm -.-> w
+    end
+```
+
+### Q: How do I run it on my Mac?
+
+You need Docker Desktop running. QuickKart is not affected: minikube runs in its own container, and the API is reached on port **8003**.
+
+```bash
+brew install minikube kubectl                  # one time
+minikube start --cpus 2 --memory 4096          # a one-machine cluster, ~1 minute
+minikube addons enable metrics-server          # lets the autoscaler see CPU use
+
+cd ~/quickserve
+infra/k8s/deploy.sh                            # database, Redis, migration Job, API, worker
+kubectl -n quickserve exec deploy/api -- python -m scripts.seed
+kubectl -n quickserve port-forward service/api 8003:80
+# open http://127.0.0.1:8003/docs   (Ctrl+C stops the port-forward, not the app)
+```
+
+Things to try, each in a second terminal:
+
+```bash
+kubectl -n quickserve get pods -w                                     # watch pods change live
+kubectl -n quickserve delete pod -l app.kubernetes.io/name=api --wait=false   # kill the API: it comes back by itself
+kubectl -n quickserve rollout restart deployment/api                  # a rolling update
+kubectl -n quickserve rollout undo deployment/api                     # roll back to the previous version
+kubectl -n quickserve get hpa                                         # the autoscaler's view of CPU
+kubectl -n quickserve logs deploy/worker -f                           # the worker's JSON logs
+```
+
+When you're done: `minikube stop` (keeps everything for next time) or `minikube delete` (removes the cluster and frees the disk and memory).
+
+### Q: Docker Compose already runs everything. What does Kubernetes add?
+
+Compose starts containers on one machine and mostly leaves them alone. Kubernetes keeps comparing **what you asked for** (2 API pods, this image, these settings) with **what is running**, and fixes the difference, on as many machines as you have. That gives you, without writing any of it yourself:
+
+- **Self-healing.** A crashed or deleted pod is replaced. CI deletes an API pod on every run and checks the API still answers.
+- **Rolling updates with no downtime**, and `rollout undo` to go back.
+- **Autoscaling.** More pods under load, fewer when quiet.
+- **One format for every cloud.** The same manifests run on minikube, EKS, GKE or AKS.
+
+The cost is more concepts and more YAML. For one small app on one server, Compose (or Phase 6's single EC2 server) is simpler and cheaper.
+
+### Q: What are all these objects? How do they map to Docker Compose?
+
+| Kubernetes object | What it does here | Closest thing in Compose |
+|---|---|---|
+| **Pod** | One running copy of a container (plus its init containers) | A container |
+| **Deployment** (`api`, `worker`, `redis`) | Keeps N identical pods running, replaces them one by one on updates | A service with `restart: unless-stopped` |
+| **StatefulSet** (`postgres`) | Like a Deployment, but each pod has a stable name and its **own disk** that survives replacement | A service with a named volume |
+| **Service** (`api`, `postgres`, `redis`) | One stable name and address in front of changing pods, with load balancing | The service name on Compose's network |
+| **Job** (`migrate`) | Runs a pod to completion, retrying on failure | The `migrate` service with `restart: "no"` |
+| **ConfigMap / Secret** | Settings and credentials, injected as environment variables | `environment:` |
+| **HorizontalPodAutoscaler** | Changes the number of API pods based on CPU | No equivalent |
+| **PodDisruptionBudget** | "Keep at least 1 API pod up" during maintenance | No equivalent |
+| **Namespace** (`quickserve`) | A folder for all of the above; deleting it deletes everything | The Compose project |
+
+The files are plain YAML combined by **Kustomize**, which is built into `kubectl`. `base/` holds the manifests. `overlays/local` points them at the ghcr.io image, and `overlays/ci` points them at the image CI just built. Run `kubectl kustomize infra/k8s/overlays/local` to see the final YAML.
+
+### Q: How do migrations run, and why do the API pods wait?
+
+The same rule as Compose: migrations run **once per deploy**, not in every API pod. A **Job** runs `alembic upgrade head`. If PostgreSQL isn't ready yet, the Job fails and Kubernetes retries it with a growing delay; you can see this in CI, where the first migration pod often shows `Error` and the second `Completed`.
+
+In Compose, `depends_on` held the API back until the migration finished. Kubernetes has no such ordering between objects. So each API and worker pod has an **init container** that runs `scripts/wait_for_migrations.py`: it compares the database's Alembic revision with the newest migration in the image, and only lets the real container start when they match. That holds even if someone runs `kubectl apply` by hand, and a pod with new code never serves requests against an old schema. Five tests cover the script: schema current, schema behind, returning immediately, timing out, and a database that isn't reachable.
+
+One catch: a Job's pod template can't be changed after it's created [53], so `deploy.sh` deletes the previous deploy's Job before applying the new one. Finished Jobs also delete themselves after 10 minutes (`ttlSecondsAfterFinished`).
+
+### Q: What's the difference between the liveness and readiness probes?
+
+They ask two different questions, and mixing them up causes outages.
+
+- **Readiness** asks "should this pod get traffic right now?" We point it at `/health/ready`, which checks the database. When it fails, the pod is taken out of the Service's endpoints [49] but keeps running, and it gets traffic again once it recovers.
+- **Liveness** asks "is this process stuck so badly that only a restart helps?" When it fails, Kubernetes restarts the container. We point it at `/health`, which checks only that the process answers.
+
+Liveness must **not** check the database. If PostgreSQL goes down and liveness checked it, Kubernetes would restart every API pod over and over. That fixes nothing (the database is still down) and makes the recovery slower. This is the reason Phase 1 built two health endpoints.
+
+### Q: How does a rolling update avoid dropping requests?
+
+Three settings work together:
+
+1. **`maxSurge: 1, maxUnavailable: 0`**: start a new pod, wait until its readiness probe passes, and only then stop an old one. Capacity never drops.
+2. **A `preStop` hook that sleeps 5 seconds.** When a pod is stopped, removing it from the Service and sending it SIGTERM happen at the same time, not one after the other [50]. Without the pause, a request routed a moment before the removal could reach a pod that is already shutting down. The sleep lets routing catch up while the old pod still answers.
+3. **Graceful shutdown in the app.** Uvicorn finishes the requests in progress, and the worker finishes its current pass. Kubernetes waits up to `terminationGracePeriodSeconds` (30) before forcing it.
+
+CI proves it on every pull request: while `kubectl rollout restart deployment/api` replaces every API pod, a script inside the cluster calls the API 5 times a second. The first run recorded **295 successful requests and 0 failures**.
+
+### Q: Why doesn't the API Deployment say how many replicas it wants?
+
+Because the autoscaler owns that number. If the Deployment said `replicas: 2`, every `kubectl apply` would reset the count to 2, undoing whatever the autoscaler had decided under load. The Kubernetes docs recommend removing `spec.replicas` when an autoscaler is used [51]. The autoscaler keeps 2 to 5 API pods and aims for 70% of the CPU each pod requested.
+
+### Q: What do `requests` and `limits` mean, and why are they FinOps?
+
+- A **request** is what the scheduler reserves for the pod on a machine. It decides which machine the pod goes on [52], and so how many machines (nodes) the cluster needs. **On a cloud cluster, requests are what you pay for**, whether the pod uses them or not.
+- A **limit** is the ceiling. A container that goes over its memory limit may be killed (OOMKilled), and one that wants more CPU than its limit is slowed down.
+
+| Pod | CPU request | Memory request | Memory limit |
+|---|---|---|---|
+| api (2 to 5 of them) | 100m (a tenth of a core) | 192 Mi | 512 Mi |
+| worker | 50m | 128 Mi | 256 Mi |
+| postgres | 100m | 256 Mi | 512 Mi |
+| redis | 50m | 64 Mi | 128 Mi |
+
+At the minimum (2 API pods) that's about 0.4 CPU and 830 Mi reserved, which fits a small node with room to spare. The autoscaler's `maxReplicas: 5` is a cost ceiling: a traffic spike or a runaway loop can't keep adding pods forever. Requests set too high waste money; set too low, pods get squeezed or killed. Measuring real use (`kubectl top pods`) and adjusting is called **rightsizing**, and it's a main FinOps job in Phase 8.
+
+### Q: How are the pods locked down?
+
+Every QuickServe container runs with:
+
+- **`runAsNonRoot` and `runAsUser: 10001`.** This is the `app` user from the Dockerfile. It has to be the number, not the name: Kubernetes can only check a numeric user is non-root.
+- **`readOnlyRootFilesystem: true`.** The app never writes to its own files, so an attacker can't either.
+- **`allowPrivilegeEscalation: false`, all Linux capabilities dropped, and the default seccomp profile.** These remove the kernel-level powers a web app never needs.
+
+CI checks that `id -u` inside the API pod prints `10001`.
+
+### Q: Why is PostgreSQL a pod here, when Phase 6 used RDS?
+
+For learning on a laptop, a StatefulSet with its own 1 GiB disk is enough, and it's free. In production, a managed database (RDS) handles backups, patching and failover far better than one pod can, and that's what the cloud setup uses. A real cluster would then drop `postgres.yaml` and point `DATABASE_URL` at RDS.
+
+### Q: The database password is in `kustomization.yaml`. Isn't that a leak?
+
+It's the same local-only `postgres` password as `docker-compose.yml`, and the file says so. Kustomize turns it into a Secret whose name includes a hash of the contents, so changing a value creates a new Secret and the pods restart with it. On a real cluster, secrets come from outside Git, for example the External Secrets Operator syncing them from AWS Parameter Store (Phase 6). Kubernetes Secrets are only base64-encoded, not encrypted, unless the cluster turns on encryption at rest.
+
+### Q: Why kind in CI but minikube on the Mac?
+
+Both run a real Kubernetes cluster inside Docker. **minikube** has handy add-ons (metrics-server, dashboard, ingress), which suit learning. **kind** ("Kubernetes in Docker") starts quickly and is built for disposable test clusters, including in CI [54]. The CI job creates a kind cluster, loads the image built from that commit, runs `deploy.sh`, and then:
+
+- seeds the demo data and logs in from inside the cluster;
+- checks the pods run as non-root;
+- does a rolling restart and requires zero failed requests;
+- deletes a pod and checks it's replaced.
+
+The cluster disappears when the job ends. Before any of that, `kubeconform` checks every manifest against the Kubernetes API schema.
+
+### Q: What's not done yet?
+
+- **Ingress with HTTPS.** The API is reached through `port-forward` for now.
+- **NetworkPolicies** ("only the API may talk to PostgreSQL"). These need a network plugin that enforces them.
+- **Metrics and dashboards** (Prometheus and Grafana).
+- **A worker heartbeat** so Kubernetes can tell a stuck worker from a busy one.
+
+Those are the next phases in the [roadmap](#13-roadmap).
+
 ---
 
 ## 9. DevOps already in the project
@@ -1342,7 +1516,7 @@ PostgreSQL 16 and Redis 7 always, the same major versions as CI and, later, AWS.
 | `ruff check` and `ruff format --check` | Style arguments end; obvious bugs (unused imports, shadowed names) caught before review |
 | `alembic upgrade head` + `alembic check` | **Fails if someone changed a model but forgot to create a migration**, a very common production incident |
 | PostgreSQL 16 and Redis 7 **service containers** | Tests run against the same database and cache as production |
-| `pytest` | All 81 tests, including the concurrency, login-attack and Redis-outage tests |
+| `pytest` | All 86 tests, including the concurrency, login-attack and Redis-outage tests |
 | `concurrency: cancel-in-progress` | Two quick pushes cancel the older run instead of paying for both |
 | `timeout-minutes: 10` | A hung job can't burn CI minutes forever |
 | A second job, `docker`, in parallel | Builds the image and smoke-tests the whole stack in containers ([details](#q-what-does-the-ci-docker-job-prove-that-the-tests-dont)) |
@@ -1458,6 +1632,10 @@ Explaining the cycle data this way shows you understand FinOps as a way of think
 | `default_tags` on every AWS resource (`project`, `environment`) | Cost Explorer can split the bill by project and environment |
 | Old state versions expire after 90 days | Versioning without paying to keep every version forever |
 | `terraform destroy` after every session | ~USD 0.15 per session instead of ~USD 30 per month |
+| Kubernetes requests sized per pod (API 100m CPU / 192 Mi) | Requests decide how many nodes a cloud cluster needs, and so the bill [52] |
+| Autoscaler between 2 and 5 API pods | Pays for extra pods only under load, with a hard ceiling |
+| `ttlSecondsAfterFinished` on the migration Job, `revisionHistoryLimit: 5` | Finished Jobs and old ReplicaSets don't pile up |
+| minikube and kind for learning Kubernetes | A real cluster for USD 0; a managed control plane bills by the hour |
 | Limits on every container in Compose (API 1 CPU / 512 MB, worker 0.5 CPU / 256 MB) | First guesses for the Kubernetes requests and limits that decide node count in Phase 7 |
 
 ### Q: How do I avoid a surprise AWS bill?
@@ -1524,13 +1702,14 @@ quickserve/
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        81 tests, real PostgreSQL and Redis
+├── tests/                        86 tests, real PostgreSQL and Redis
 ├── infra/                        Terraform for AWS (Phase 6); start with infra/README.md
+│   ├── k8s/                      Kubernetes (Phase 7): base/ manifests, overlays/local and ci, deploy.sh
 │   ├── bootstrap/                budget alert + S3 state bucket, once per account
 │   ├── envs/dev/                 network, database, secrets, app server (+ tests/)
 │   └── modules/                  budget, network, database, app_server (each with tests/)
 ├── docs/docker.md                the Dockerfile explained line by line
-├── .github/workflows/ci.yml      four jobs: test, docker (build + smoke test), publish (ghcr.io), terraform
+├── .github/workflows/ci.yml      five jobs: test, docker, publish (ghcr.io), terraform, kubernetes (kind)
 ├── Dockerfile                    two-stage image, runs as user "app"
 ├── .dockerignore                 keeps venv/, .git/, tests and .env out of the image
 ├── docker-compose.yml            db + redis; profile "app" adds migrate, api, worker
@@ -1582,7 +1761,8 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **5. Docker and CI/CD** (done) | Multi-stage Dockerfile, non-root user, runtime lock file, Compose with `db` + `redis` + `migrate` + `api` + `worker`, CI builds the image and smoke-tests the running stack | Image layers and size, container networking, migrations as a one-off job, graceful shutdown |
 | **5b. Image registry** (done) | CI publishes the image to GitHub Container Registry after both other jobs pass, tagged with the commit ID, for Intel and ARM | Immutable tags, least-privilege CI tokens, multi-architecture images |
 | **6. AWS and Terraform** (code done and tested; applying it is your call) | Budget alert and S3 state bucket (bootstrap), VPC with public/private subnets and no NAT, RDS PostgreSQL 16, Parameter Store secrets, one Graviton EC2 server running the ghcr.io image, Session Manager instead of SSH, 18 mock-based `terraform test` checks in CI | IAM least privilege, public vs private subnets, remote state and locking, IMDSv2, `plan`/`apply`/`destroy` |
-| **7. Kubernetes and monitoring** | Minikube first: Deployments, Services, Ingress, ConfigMaps, Secrets, HPA, probes wired to `/health` and `/health/ready`; Prometheus + Grafana with the business signals above | Requests vs limits, rolling updates, what happens when a pod dies |
+| **7. Kubernetes** (done) | Kustomize manifests for minikube: Deployments, StatefulSet, Services, migration Job with wait-for-migrations init containers, ConfigMap and Secret, HPA, PDB, probes wired to `/health` and `/health/ready`, locked-down pods; CI deploys to kind and checks a zero-downtime rollout and self-healing | Requests vs limits, liveness vs readiness, rolling updates, what happens when a pod dies |
+| **7b. Monitoring** (next) | Prometheus metrics endpoint, Grafana dashboards with the business signals above, alerts, Ingress with HTTPS | The four golden signals, SLOs, alert fatigue |
 | **8. FinOps and services** | Cost per order measured on EC2 vs Kubernetes, OpenCost, rightsizing; split out the notification service driven by `order_status_events` | Unit economics, event-driven design, the outbox pattern |
 
 ---
@@ -1689,3 +1869,9 @@ Business and tax figures change often; the dates show when each was reported.
 46. Spare Cores, *db.t4g.micro* (PostgreSQL, Mumbai single-zone: about USD 0.021 per hour). https://sparecores.com/database/aws/db.t4g.micro
 47. DevZero, *t4g.small* (on-demand from about USD 0.0112 per hour in ap-south-1). https://www.devzero.io/instances/aws/t4g.small
 48. AWS, *AWS Budgets pricing* (budgets without actions are free; first two action-enabled budgets free). https://aws.amazon.com/aws-cost-management/aws-budgets/pricing
+49. Kubernetes documentation, *Liveness, Readiness, and Startup Probes* (a failed readiness probe removes the pod from the Service's endpoints; liveness restarts the container). https://kubernetes.io/docs/concepts/workloads/pods/probes/
+50. Google Cloud blog, *Kubernetes best practices: terminating with grace* (pod removed from Service endpoints; preStop hook; SIGTERM; grace period; SIGKILL). https://cloud.google.com/blog/products/containers-kubernetes/kubernetes-best-practices-terminating-with-grace
+51. Kubernetes documentation, *Horizontal Pod Autoscaling* (remove `spec.replicas` from the manifest when an HPA is enabled). https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+52. Kubernetes documentation, *Resource Management for Pods and Containers* (the scheduler places pods by their requests; memory limits enforced by OOM kills). https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+53. Kubernetes documentation, *Jobs* (a Job's pod template can't be updated; delete and recreate). https://kubernetes.io/docs/concepts/workloads/controllers/job/
+54. kind documentation, *Initial design* (Kubernetes clusters whose nodes are Docker containers, aimed at testing). https://kind.sigs.k8s.io/docs/design/initial/

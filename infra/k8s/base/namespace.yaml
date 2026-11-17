@@ -1,0 +1,6 @@
+# A namespace is a folder for Kubernetes objects. Everything QuickServe needs
+# lives in "quickserve", so `kubectl delete namespace quickserve` removes all of it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: quickserve
