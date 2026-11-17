@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import NotFound
 from app.database.session import transaction
 from app.modules.menu import analytics
+from app.modules.menu import cache as menu_cache
 from app.modules.menu import repository as repo
 from app.modules.menu.model import InventoryCycle, MenuItem
 from app.modules.menu.schema import AvailabilityUpdate, MenuItemCreate, MenuItemPublic, RestockSuggestion
@@ -38,6 +39,7 @@ def create_menu_item(db: Session, restaurant_id: uuid.UUID, data: MenuItemCreate
         db.add(item)
         db.flush()  # sends the INSERT now, so the cycle below can reference item.id
         db.add(InventoryCycle(menu_item_id=item.id, cycle_no=1, started_at=now, units_stocked=item.stock, carried_in=0))
+    menu_cache.invalidate(restaurant_id)  # after the commit: see cache.py
     return item
 
 
@@ -88,6 +90,7 @@ def restock(
                 carried_in=carried,
             )
         )
+    menu_cache.invalidate(item.restaurant_id)
     return cycle, item
 
 
@@ -97,6 +100,7 @@ def set_availability(db: Session, menu_item_id: uuid.UUID, data: AvailabilityUpd
         item.is_available = data.is_available
         # Switching on clears any timer. Switching off with a time means "back at that time".
         item.unavailable_until = None if data.is_available else data.unavailable_until
+    menu_cache.invalidate(item.restaurant_id)
     return item
 
 
@@ -120,6 +124,17 @@ def _badge(item: MenuItem, now: datetime) -> tuple[str | None, int | None]:
         if item.available / per_minute <= SELLING_FAST_MINUTES:
             return "SELLING_FAST", None
     return None, None
+
+
+def customer_menu_cached(db: Session, restaurant_id: uuid.UUID) -> tuple[list[MenuItemPublic], str]:
+    """The menu page, through the Redis cache. Returns (items, HIT / MISS / BYPASS)."""
+    items, status = menu_cache.get(restaurant_id)
+    if items is not None:
+        return items, status
+    items = customer_menu(db, restaurant_id)
+    if status == menu_cache.MISS:
+        menu_cache.put(restaurant_id, items)
+    return items, status
 
 
 def customer_menu(db: Session, restaurant_id: uuid.UUID) -> list[MenuItemPublic]:
