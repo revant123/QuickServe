@@ -1413,14 +1413,20 @@ The lesson for production: a probe that is too strict causes the outage it was m
 
 ### Q: I merged new code but minikube still runs the old version. Why?
 
-The local overlay runs the image tag `main`, which CI moves to the newest build after every merge. Kubernetes only re-downloads an image automatically when the tag is `latest`. For any other tag the default is `imagePullPolicy: IfNotPresent`: if the node already has *an* image called `main`, it uses it, even if it's weeks old.
+Two traps, both about the moving `main` tag:
 
-Two changes fix this for the local overlay:
+1. **Cached images.** Kubernetes only re-downloads an image automatically when the tag is `latest`. For any other tag the default is `imagePullPolicy: IfNotPresent`: if the node already has *an* image called `main`, it uses it, even if it's weeks old.
+2. **Deploying too early.** Right after you merge, CI needs 3 to 5 minutes to build and publish the new image. Until then, `main` on ghcr.io still points to the **previous** build, so "deploy main" quietly runs the old code. This happened for real with Phase 8: deploying straight after the merge would have started a cluster with no notifier code in it.
 
-1. **`overlays/local/pull-always.yaml`** sets `imagePullPolicy: Always` on the API, worker and migration containers, so every new pod checks ghcr.io first.
-2. **`deploy.sh` restarts the API and the worker** when they were already running. If the YAML didn't change, `kubectl apply` would otherwise leave the old pods alone.
+`deploy.sh` now avoids both by deploying **the exact commit you have checked out**. It turns `git rev-parse HEAD` into the image tag CI publishes for that commit (`sha-bfe4bee`, for example) and checks on ghcr.io that it exists. If CI is still building, it waits (up to 10 minutes, checking every 20 seconds) instead of deploying something else.
 
-The CI overlay doesn't use `Always`, because its image is loaded straight into kind and isn't on any registry. In production, the clean answer is to deploy **immutable `sha-<commit>` tags** (Phase 5b). A new tag is a change in the YAML, so Kubernetes rolls the pods by itself, and you always know exactly which code is running.
+That's the production habit from Phase 5b: deploy **immutable** tags. A new tag is a change in the YAML, so Kubernetes rolls the pods by itself, and the same tag means nothing changed and nothing restarts. You always know exactly which code is running.
+
+Other cases:
+
+- **You're on a feature branch** whose commit CI never published: `deploy.sh` stops and says so.
+- **Uncommitted changes** in `app/`: it warns you that they aren't in the image.
+- **You just want whatever `main` is right now:** run `IMAGE_TAG=main infra/k8s/deploy.sh`. For that moving tag, the local overlay's `imagePullPolicy: Always` and a restart of the API, worker and notifier still apply.
 
 ### Q: Docker Compose already runs everything. What does Kubernetes add?
 
