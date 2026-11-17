@@ -59,6 +59,9 @@ if [[ "$OVERLAY" != *ci* ]]; then
   render() { kubectl kustomize "$OVERLAY" | sed "s#ghcr.io/${REPO}:main#ghcr.io/${REPO}:${TAG}#g"; }
 fi
 
+# Cluster add-ons the manifests need (Phase 9): Envoy Gateway and cert-manager.
+"$(dirname "$0")/addons.sh"
+
 # A Job's pod spec can't change after it's created. Delete last deploy's Job so
 # this deploy's image runs its migrations.
 kubectl -n "$NS" delete job migrate --ignore-not-found --wait=true >/dev/null 2>&1 || true
@@ -66,11 +69,21 @@ kubectl -n "$NS" delete job migrate --ignore-not-found --wait=true >/dev/null 2>
 # Was QuickServe already running before this deploy?
 ALREADY_DEPLOYED=$(kubectl -n "$NS" get deployment api -o name 2>/dev/null || true)
 
-if [[ "$OVERLAY" != *ci* ]]; then
-  render | kubectl apply -f -
-else
-  kubectl apply -k "$OVERLAY"
-fi
+apply_manifests() {
+  if [[ "$OVERLAY" != *ci* ]]; then
+    render | kubectl apply -f -
+  else
+    kubectl apply -k "$OVERLAY"
+  fi
+}
+# Retried: on a fresh cluster cert-manager's webhook can report "ready" a few
+# seconds before it accepts requests, so the first try at the certificates fails.
+for attempt in 1 2 3 4 5 6; do
+  if apply_manifests; then break; fi
+  if (( attempt == 6 )); then echo "kubectl apply kept failing"; exit 1; fi
+  echo "Apply failed (attempt $attempt); retrying in 10 s..."
+  sleep 10
+done
 
 echo "Waiting for PostgreSQL and Redis..."
 kubectl -n "$NS" rollout status statefulset/postgres --timeout=180s
@@ -98,9 +111,23 @@ kubectl -n "$NS" rollout status deployment/grafana --timeout=180s
 kubectl -n "$NS" rollout status deployment/alertmanager --timeout=120s
 kubectl -n "$NS" rollout status deployment/mailpit --timeout=120s
 
+echo "Waiting for the HTTPS certificate and the gateway (Envoy)..."
+kubectl -n "$NS" wait --for=condition=Ready certificate/quickserve-tls --timeout=180s
+kubectl -n "$NS" wait --for=condition=Programmed gateway/quickserve --timeout=180s
+for _ in $(seq 1 30); do # Envoy Gateway creates the Deployment a moment after the Gateway
+  kubectl -n envoy-gateway-system get deployment/quickserve-gateway >/dev/null 2>&1 && break
+  sleep 2
+done
+kubectl -n envoy-gateway-system rollout status deployment/quickserve-gateway --timeout=180s
+
 kubectl -n "$NS" get pods
 echo
-echo "Deployed. Open it with (each in its own terminal):"
+echo "Deployed. The front door (Phase 9), in its own terminal:"
+echo "  kubectl -n envoy-gateway-system port-forward service/quickserve-gateway 8443:443"
+echo "  -> https://quickserve.localhost:8443/docs   and   https://grafana.quickserve.localhost:8443"
+echo "     (the browser warns about the certificate until you trust QuickServe's local CA: see the README)"
+echo
+echo "Or each service directly (each in its own terminal):"
 echo "  kubectl -n $NS port-forward service/api 8003:80          -> http://127.0.0.1:8003/docs"
 echo "  kubectl -n $NS port-forward service/grafana 3005:3000    -> http://127.0.0.1:3005  (dashboards)"
 echo "  kubectl -n $NS port-forward service/prometheus 9095:9090 -> http://127.0.0.1:9095  (raw metrics, alerts)"

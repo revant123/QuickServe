@@ -1,0 +1,47 @@
+# Envoy Gateway's own policy objects: features the standard Gateway API
+# doesn't have (yet). They "attach" to a Gateway or a route by targetRefs.
+#
+# A rate limit at the edge for login. The API already limits failed logins per
+# email and per IP (Redis, Phase 4). This is a different, coarser layer: a cap
+# on how many login attempts reach the API at all, whoever sends them, so a
+# flood is turned away by Envoy for almost no CPU instead of costing ~0.1 s of
+# Argon2 password hashing each. 60 a minute is ~0.1 CPU core of hashing.
+#
+# "Local" means each Envoy pod counts on its own (with 2 Envoy pods: 120 a
+# minute in total). A per-client-IP limit at the edge needs Envoy Gateway's
+# "Global" rate limit with a shared Redis; Local can't count per IP.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: api-edge-limits
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: api
+  rateLimit:
+    type: Local
+    local:
+      rules:
+        - clientSelectors:
+            - path:
+                type: Exact
+                value: /api/v1/auth/login
+          limit:
+            requests: 60
+            unit: Minute
+---
+# Request IDs: keep the caller's X-Request-ID, or make one. The API reuses it
+# (app/core/logging.py), so ONE ID appears in Envoy's access log and the API's
+# log line: you can follow a request through both.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: edge
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: quickserve
+  headers:
+    requestID: PreserveOrGenerate

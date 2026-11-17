@@ -1,0 +1,24 @@
+# The front door (Phase 9): one Gateway for every hostname, with HTTPS.
+#
+#   https://quickserve.localhost:8443          -> the API (Swagger at /docs)
+#   https://grafana.quickserve.localhost:8443  -> Grafana
+#
+# Needs two cluster add-ons that infra/k8s/addons.sh installs first:
+#   Envoy Gateway  - turns Gateway and HTTPRoute objects into a running Envoy proxy
+#   cert-manager   - creates and renews the TLS certificate
+# Included by both overlays.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: quickserve
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: quickserve
+    includeSelectors: false
+
+resources:
+  - tls.yaml # our own small certificate authority + the site certificate
+  - gateway.yaml # GatewayClass, the Envoy settings, the Gateway (listeners)
+  - routes.yaml # which hostname and path goes to which Service
+  - policies.yaml # rate limit at the edge, request IDs

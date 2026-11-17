@@ -6,6 +6,7 @@ kind: Kustomization
 resources:
   - ../../base
   - ../../monitoring
+  - ../../gateway # HTTPS front door (Phase 9); needs infra/k8s/addons.sh first
 
 images:
   - name: quickserve

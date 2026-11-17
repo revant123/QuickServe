@@ -1,0 +1,64 @@
+# HTTPS certificates, made and renewed by cert-manager. Three steps, the same
+# shape as the real internet, just with our own certificate authority (CA):
+#
+#   1. selfsigned  - an Issuer that can only sign a certificate with itself
+#   2. quickserve-ca - it signs ONE certificate: our CA ("QuickServe Local CA")
+#   3. quickserve-ca-issuer - signs site certificates with that CA
+#
+# Why not sign the site certificate with itself directly? Then every renewal
+# would be a brand-new, untrusted certificate. With a CA you can trust the CA
+# once (curl --cacert, or your browser) and every future site certificate it
+# signs is trusted too. On a public site, step 2 is Let's Encrypt instead: an
+# ACME Issuer proves you own the domain and gets a certificate browsers trust.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: quickserve-ca
+spec:
+  isCA: true
+  commonName: QuickServe Local CA
+  secretName: quickserve-ca
+  duration: 87600h # 10 years: a CA lives long, the certificates it signs don't
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    kind: Issuer
+    name: selfsigned
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: quickserve-ca-issuer
+spec:
+  ca:
+    secretName: quickserve-ca
+---
+# The certificate the Gateway shows to browsers. cert-manager renews it on its
+# own 30 days before it expires and updates the Secret; Envoy picks up the new
+# one without a restart. Expired certificates are a classic outage cause.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: quickserve-tls
+spec:
+  secretName: quickserve-tls
+  dnsNames:
+    - quickserve.localhost
+    - grafana.quickserve.localhost
+  duration: 2160h # 90 days, like Let's Encrypt
+  renewBefore: 720h # renew with 30 days left
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always # a new key at every renewal
+  issuerRef:
+    kind: Issuer
+    name: quickserve-ca-issuer

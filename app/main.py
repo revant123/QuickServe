@@ -70,6 +70,10 @@ async def request_context(request: Request, call_next):
         method=request.method,
         path=request.url.path,  # path only: query strings can contain personal data
         status=response.status_code,
+        # The real client, also behind the gateway: uvicorn takes it from
+        # X-Forwarded-For, but only when the request came from a trusted proxy
+        # (FORWARDED_ALLOW_IPS, see infra/k8s/base/config.yaml).
+        client_ip=request.client.host if request.client else None,
         duration_ms=duration_ms,
     )
     request_id_var.reset(token)

@@ -1,0 +1,75 @@
+# GatewayClass: "which software runs our gateways". Here Envoy Gateway; on a
+# cloud it might be the AWS Load Balancer Controller or GKE's. Cluster-wide.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: quickserve-envoy
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+# How Envoy Gateway should run OUR Envoy proxy.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: quickserve-proxy
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        # A fixed name (the default has a hash in it), so the port-forward
+        # command in the README always works.
+        name: quickserve-gateway
+        # ClusterIP: reached with `kubectl port-forward`. On a cloud this would
+        # be LoadBalancer, which creates a real, billed load balancer. One
+        # Gateway for every hostname means ONE load balancer, not one per app.
+        type: ClusterIP
+      envoyDeployment:
+        name: quickserve-gateway # fixed name, so deploy.sh can wait for it
+        replicas: 1 # production: 2 or more, in different zones
+        container:
+          # Envoy Gateway's default asks for much more; this is enough for us.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+# The Gateway: the actual front door. Two listeners (ports). Envoy runs as a
+# non-root user, so inside the pod it listens on 10080 and 10443; the Service
+# still exposes 80 and 443.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: quickserve
+spec:
+  gatewayClassName: quickserve-envoy
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: quickserve-proxy
+  listeners:
+    # Plain HTTP exists only to redirect to HTTPS (see routes.yaml).
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+    # HTTPS: TLS ends here ("TLS termination"). Behind it, inside the cluster,
+    # traffic to the pods is plain HTTP. Zero-trust setups encrypt that hop too
+    # (mTLS, usually with a service mesh).
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: quickserve-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
