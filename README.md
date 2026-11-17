@@ -228,6 +228,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| Image published to a registry (Phase 5b) | [Registry Q&A](#q-where-does-the-image-go-after-ci-builds-it); the `publish` job in `.github/workflows/ci.yml`; `ghcr.io/revant123/quickserve` |
 | Dockerfile and the whole stack in Docker (Phase 5) | [Docker Q&A](#docker-the-app-in-containers-phase-5); `Dockerfile`, `.dockerignore`, `docker-compose.yml` (profile `app`), `requirements.lock`, [docs/docker.md](docs/docker.md), the `docker` job in CI |
 | Redis cache, rate limiting, logout, worker, JSON logs (Phase 4) | [Section 8](#8-redis-the-background-worker-and-logs-phase-4); `app/core/redis.py`, `app/core/logging.py`, `app/worker.py`, `app/modules/menu/cache.py` |
 | Everything in the README, as natural questions and answers | This file |
@@ -244,7 +245,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Background jobs | A separate worker (`python -m app.worker`) expires unpaid orders and auto-rejects orders the restaurant didn't accept, every 30 seconds; safe to run several (`FOR UPDATE SKIP LOCKED`); graceful shutdown | |
 | Caching and logs | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses | Metrics and dashboards (Phase 7) |
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
-| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code and smoke-tests the built containers, liveness/readiness checks, pinned and locked dependencies | Pushing the image to a registry, AWS, Terraform, Kubernetes |
+| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, liveness/readiness checks, pinned and locked dependencies | AWS, Terraform, Kubernetes |
 
 Everything except browsing restaurants and menus needs a login. Orders belong to the logged-in customer, and who may change an order's status is decided by the login token, never by the request body. See [section 7](#7-login-tokens-and-permissions).
 
@@ -475,7 +476,7 @@ flowchart LR
 
 ### 3.7 CI pipeline (runs on every push and pull request)
 
-Two jobs run side by side, so adding the Docker job didn't make CI slower.
+`test` and `docker` run side by side, so adding the Docker job didn't make CI slower. `publish` waits for both.
 
 ```mermaid
 flowchart LR
@@ -497,10 +498,13 @@ flowchart LR
         stop --> size["write image size to the run summary"]
     end
 
-    pyt --> ok{"both green?"}
-    size --> ok
-    ok -->|yes| merge["safe to merge"]
-    ok -->|no| fix["fix before merging"]
+    pyt --> pub
+    size --> pub
+
+    subgraph publish["job: publish (needs test and docker)"]
+        pub{"push to main?"} -->|"yes"| push["build amd64 + arm64, push to ghcr.io as sha-xxxxxxx and main"]
+        pub -->|"pull request"| only["build amd64 only, don't push"]
+    end
 ```
 
 ### 3.8 The whole stack in Docker Compose (Phase 5)
@@ -1169,6 +1173,40 @@ The tests prove the code is right. The `docker` job proves the **image** is righ
 
 Claude Code measured it on the Mac: about **387 MB** on disk and about **82 MB** compressed, which is what a registry stores and every deploy downloads. Only about 0.3 MB of that is our code; most is Python and the libraries. Amazon ECR charges about USD 0.10 per GB per month for storage, for every version kept; pulls within the same AWS region are free, but cross-region pulls are billed per GB [32]. Check current pricing for your region before relying on these numbers. So in Phase 6 we'll add a registry lifecycle rule that keeps only the last few versions. The cheap wins already taken: a `slim` base image, two stages, no test tools in the image, and a `.dockerignore` that keeps `venv/`, `.git/` and tests out of the build.
 
+### Q: Where does the image go after CI builds it?
+
+To a **registry**, an online store for images, like GitHub is for code. A third CI job, `publish`, pushes it to GitHub Container Registry at `ghcr.io/revant123/quickserve`. Any server (later AWS) can then download that exact image instead of building it again. Three rules decide when it runs:
+
+- **Only after `test` and `docker` both pass** (`needs: [test, docker]`). A broken image never reaches the registry.
+- **Only pushes to `main` publish.** On a pull request the job still builds the image but doesn't push it, so a mistake in the publish step shows up in review.
+- **Only this job may write packages** (`permissions: packages: write`). The other jobs can't, which is the least-privilege habit you'll use again with AWS IAM.
+
+It logs in with `GITHUB_TOKEN`, a token GitHub creates for each run and throws away afterwards, so there's no password to store or leak.
+
+### Q: Why tag the image `sha-3073e30` and not just `latest`?
+
+`latest` is a label that moves every time you push, so "which code is running in production?" has no clear answer, and rolling back means rebuilding. A tag made from the **commit ID** never moves: `sha-3073e30` is always exactly that commit, so a rollback is just "run the previous tag". The job also adds a `main` tag that always points at the newest build, for convenience. Deploys should always use the `sha-` tag.
+
+### Q: Why build for two processor types (amd64 and arm64)?
+
+Most servers and the CI machines use Intel/AMD chips (`amd64`). Apple Silicon Macs and AWS Graviton servers use ARM chips (`arm64`). Docker picks the right one automatically when you pull. This is a FinOps choice: AWS says Graviton-based containers on Fargate get up to 40% better performance at 20% lower cost than comparable x86 ones [36], and having an ARM image ready keeps that option open for Phase 6. Building ARM on an Intel CI machine uses an emulator (QEMU), which is slower, so pull requests build only `amd64` and the two-chip build runs only on `main`.
+
+### Q: Does the registry cost anything?
+
+Not for this project: GitHub Packages is free for public packages [35]. A new package on ghcr.io may start out **private** even when the repository is public. To let anyone pull it without logging in, open the package on GitHub (your profile → **Packages** → `quickserve` → **Package settings**) and change the visibility to public. On AWS we'll use Amazon ECR instead, which bills storage per GB per month [32], so that's when the "keep only the last N images" rule matters.
+
+### Q: How do I run the published image instead of building it?
+
+```bash
+docker pull ghcr.io/revant123/quickserve:main
+docker run --rm -p 8002:8000 \
+  -e DATABASE_URL=postgresql+psycopg://postgres:postgres@host.docker.internal:5434/quickserve \
+  -e REDIS_URL=redis://host.docker.internal:6380/0 \
+  ghcr.io/revant123/quickserve:main
+```
+
+This is exactly what a server does: download a tested image and give it settings through environment variables. Nothing is built on the server.
+
 ---
 
 ## 9. DevOps already in the project
@@ -1297,6 +1335,8 @@ Explaining the cycle data this way shows you understand FinOps as a way of think
 | Slim base image, two-stage build, `.dockerignore` | About 82 MB compressed; registry storage and cross-region pulls bill per GB |
 | One image for API, worker and migrations | One thing to build, scan and store instead of three |
 | CI writes the image size to every run's summary | A size jump is seen in review, not on the bill |
+| Image built for ARM as well as Intel | Keeps cheaper AWS Graviton servers an option [36] |
+| Two-chip build only on `main`, layer cache shared between runs | The slow emulated ARM build doesn't run on every pull request; fewer CI minutes |
 | Limits on every container in Compose (API 1 CPU / 512 MB, worker 0.5 CPU / 256 MB) | First guesses for the Kubernetes requests and limits that decide node count in Phase 7 |
 
 ### Q: How do I avoid a surprise AWS bill?
@@ -1365,7 +1405,7 @@ quickserve/
 │   └── create_test_db.sql        runs on first Postgres container start
 ├── tests/                        81 tests, real PostgreSQL and Redis
 ├── docs/docker.md                the Dockerfile explained line by line
-├── .github/workflows/ci.yml      two jobs: test, and docker (build + smoke test)
+├── .github/workflows/ci.yml      three jobs: test, docker (build + smoke test), publish (ghcr.io)
 ├── Dockerfile                    two-stage image, runs as user "app"
 ├── .dockerignore                 keeps venv/, .git/, tests and .env out of the image
 ├── docker-compose.yml            db + redis; profile "app" adds migrate, api, worker
@@ -1415,7 +1455,7 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **3. Auth** (done) | Login, JWT access tokens, four roles, ownership checks, rider role migration | Authentication vs authorization, hashing vs encryption, token expiry, object-level authorization |
 | **4. Redis, jobs, logging** (done) | Redis menu cache invalidated on owner changes, worker running the timeout job every 30 seconds, login rate limiting and logout in Redis, JSON logs with request IDs | Cache invalidation, at-least-once jobs, rate limiting, log cost |
 | **5. Docker and CI/CD** (done) | Multi-stage Dockerfile, non-root user, runtime lock file, Compose with `db` + `redis` + `migrate` + `api` + `worker`, CI builds the image and smoke-tests the running stack | Image layers and size, container networking, migrations as a one-off job, graceful shutdown |
-| **5b. Image registry** (next, with Phase 6) | CI pushes the image, tagged with the commit SHA, to a registry (GitHub Container Registry, then Amazon ECR), with a rule that deletes old versions | Immutable tags, registry storage cost |
+| **5b. Image registry** (done) | CI publishes the image to GitHub Container Registry after both other jobs pass, tagged with the commit ID, for Intel and ARM | Immutable tags, least-privilege CI tokens, multi-architecture images |
 | **6. AWS and Terraform** | VPC, EC2 or ECS, RDS PostgreSQL, Secrets Manager, Nginx, everything in Terraform with remote state | IAM least privilege, public vs private subnets, `plan`/`apply`/`destroy` |
 | **7. Kubernetes and monitoring** | Minikube first: Deployments, Services, Ingress, ConfigMaps, Secrets, HPA, probes wired to `/health` and `/health/ready`; Prometheus + Grafana with the business signals above | Requests vs limits, rolling updates, what happens when a pod dies |
 | **8. FinOps and services** | Cost per order measured on EC2 vs Kubernetes, OpenCost, rightsizing; split out the notification service driven by `order_status_events` | Unit economics, event-driven design, the outbox pattern |
@@ -1510,3 +1550,5 @@ Business and tax figures change often; the dates show when each was reported.
 32. AWS, *Amazon ECR pricing* (storage per GB-month; free same-region transfer to EC2, ECS and Fargate; cross-region transfer billed). https://aws.amazon.com/ecr/pricing/
 33. Docker documentation, *Control startup order in Compose* (`depends_on` with `service_healthy` and `service_completed_successfully`). https://docs.docker.com/compose/how-tos/startup-order/
 34. Docker documentation, *Using profiles with Compose*. https://docs.docker.com/compose/how-tos/profiles/
+35. GitHub Docs, *GitHub Packages billing* (free for public packages). https://docs.github.com/en/billing/managing-billing-for-github-packages
+36. AWS, *AWS Graviton Fast Start* (Graviton on Fargate: up to 40% better performance at 20% lower cost than comparable x86). https://aws.amazon.com/ec2/graviton/fast-start
