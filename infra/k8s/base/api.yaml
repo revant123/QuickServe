@@ -79,11 +79,24 @@ spec:
                 name: app-secrets
           # Readiness: "send me traffic?" /health/ready checks the database.
           # When it fails, the pod is taken out of the Service but NOT restarted.
+          # Every probe has an explicit timeout. The default is 1 second, and on
+          # a busy laptop (ten pods starting on two CPUs) a healthy app can take
+          # longer than that to answer, so it got restarted for no reason.
+          #
+          # Startup: give a slow start up to 2 minutes before liveness kicks in.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
           readinessProbe:
             httpGet:
               path: /health/ready
               port: http
             periodSeconds: 5
+            timeoutSeconds: 3
             failureThreshold: 2
           # Liveness: "is the process stuck?" /health only checks the process.
           # It must NOT check the database: if PostgreSQL goes down, restarting
@@ -92,9 +105,9 @@ spec:
             httpGet:
               path: /health
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 10
-            failureThreshold: 3
+            timeoutSeconds: 5
+            failureThreshold: 3 # 30 s of silence before a restart
           lifecycle:
             # When a pod is told to stop, Kubernetes removes it from the Service
             # at the same time. Waiting 5 s first lets in-flight requests and

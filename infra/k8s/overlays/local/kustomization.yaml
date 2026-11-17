@@ -11,3 +11,7 @@ images:
   - name: quickserve
     newName: ghcr.io/revant123/quickserve
     newTag: main
+
+# Always check ghcr.io for a newer `main` image (see the file for why).
+patches:
+  - path: pull-always.yaml

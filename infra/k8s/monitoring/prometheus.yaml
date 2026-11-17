@@ -81,11 +81,16 @@ spec:
             httpGet:
               path: /-/ready
               port: web
+            periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /-/healthy
               port: web
             initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

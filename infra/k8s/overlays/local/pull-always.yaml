@@ -1,0 +1,47 @@
+# Why this file exists: the local overlay runs the `main` tag, which CI moves to
+# the newest build after every merge. Kubernetes only re-downloads an image
+# automatically when the tag is `latest`; for any other tag it keeps the copy
+# it already has (imagePullPolicy: IfNotPresent). So minikube kept running OLD
+# code after every merge. `Always` makes each new pod check ghcr.io first.
+#
+# Not in the CI overlay: there the image is loaded straight into kind and
+# doesn't exist on any registry, so `Always` would fail to pull it.
+# In production, deploy immutable sha-<commit> tags instead (Phase 5b).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: wait-for-migrations
+          imagePullPolicy: Always
+      containers:
+        - name: api
+          imagePullPolicy: Always
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: wait-for-migrations
+          imagePullPolicy: Always
+      containers:
+        - name: worker
+          imagePullPolicy: Always
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+spec:
+  template:
+    spec:
+      containers:
+        - name: migrate
+          imagePullPolicy: Always

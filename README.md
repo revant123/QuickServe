@@ -1361,11 +1361,11 @@ flowchart LR
 
 ### Q: How do I run it on my Mac?
 
-You need Docker Desktop running. QuickKart is not affected: minikube runs in its own container, and the API is reached on port **8003**.
+You need Docker Desktop running. QuickKart is not affected: minikube runs in its own container, and the API is reached on port **8003**. Run the commands **one at a time**, waiting for each to finish. If they're pasted all at once, `deploy.sh` can start before the cluster is up, and you get `connection refused` errors.
 
 ```bash
 brew install minikube kubectl                  # one time
-minikube start --cpus 2 --memory 4096          # a one-machine cluster, ~1 minute
+minikube start --cpus 4 --memory 3072          # a one-machine cluster, ~1 minute
 minikube addons enable metrics-server          # lets the autoscaler see CPU use
 
 cd ~/quickserve
@@ -1387,6 +1387,34 @@ kubectl -n quickserve logs deploy/worker -f                           # the work
 ```
 
 When you're done: `minikube stop` (keeps everything for next time) or `minikube delete` (removes the cluster and frees the disk and memory).
+
+**Why 4 CPUs and 3 GB?** That's what worked on an 8 GB MacBook. Two things went wrong on the first try:
+
+- **Memory:** Docker Desktop's memory is shared by everything running in Docker: QuickKart, QuickServe's Compose containers, other containers and minikube. With 2 GB used by an unrelated SQL Server container, Docker ran out of memory and swap, and Grafana couldn't start. Check with `docker stats --no-stream` and stop what you don't need (`docker stop <name>`; `docker start <name>` brings it back). minikube's `--memory` must be well below the memory set in Docker Desktop → Settings → Resources.
+- **CPU:** with 2 CPUs, ten pods starting together kept the CPU at 100%. Health checks then took more than their 1-second default timeout, Kubernetes decided healthy pods were dead, and restarted them in a loop, which used even more CPU. With 4 CPUs (they're shared with macOS, not reserved) the deploy passes on the first try. The probes now also have longer timeouts (next question).
+
+### Q: Why do the probes have explicit timeouts, and what's a startup probe?
+
+Every probe has a `timeoutSeconds`, and **the default is 1 second**. That's fine on a quiet server, but on a laptop starting ten pods at once, a perfectly healthy API can take 1.5 seconds to answer `/health`. Kubernetes counts that as a failure, and after a few failures the liveness probe restarts the pod. Restarting makes the CPU even busier, so more probes fail: a **restart loop caused by the health checks themselves**.
+
+The fix, now in the manifests:
+
+- **Explicit timeouts** on every probe: 3 seconds for the API, PostgreSQL and Redis, 5 seconds for Prometheus and Grafana.
+- **A startup probe on the API.** It allows up to 2 minutes for the first successful `/health`, and Kubernetes doesn't run the liveness probe until it passes. A slow start is no longer mistaken for a stuck process, while a process that hangs later is still restarted within 30 seconds.
+- **Grafana's readiness** checks every 10 seconds with a 5-second timeout and allows a minute of failures, because its first start (database setup, loading dashboards) is slow.
+
+The lesson for production: a probe that is too strict causes the outage it was meant to detect. Set timeouts from how long the endpoint really takes under load, not from the default.
+
+### Q: I merged new code but minikube still runs the old version. Why?
+
+The local overlay runs the image tag `main`, which CI moves to the newest build after every merge. Kubernetes only re-downloads an image automatically when the tag is `latest`. For any other tag the default is `imagePullPolicy: IfNotPresent`: if the node already has *an* image called `main`, it uses it, even if it's weeks old.
+
+Two changes fix this for the local overlay:
+
+1. **`overlays/local/pull-always.yaml`** sets `imagePullPolicy: Always` on the API, worker and migration containers, so every new pod checks ghcr.io first.
+2. **`deploy.sh` restarts the API and the worker** when they were already running. If the YAML didn't change, `kubectl apply` would otherwise leave the old pods alone.
+
+The CI overlay doesn't use `Always`, because its image is loaded straight into kind and isn't on any registry. In production, the clean answer is to deploy **immutable `sha-<commit>` tags** (Phase 5b). A new tag is a change in the YAML, so Kubernetes rolls the pods by itself, and you always know exactly which code is running.
 
 ### Q: Docker Compose already runs everything. What does Kubernetes add?
 

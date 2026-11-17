@@ -63,10 +63,16 @@ spec:
           ports:
             - name: web
               containerPort: 3000
+          # Grafana takes a while to start (database migrations, provisioning),
+          # and /api/health can be slow while it does. 5 s per check, and up to
+          # 1 minute of failed checks, before it's marked not ready.
           readinessProbe:
             httpGet:
               path: /api/health
               port: web
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
