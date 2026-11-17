@@ -53,15 +53,17 @@ fi
 #    If this fails, set -e stops the script and the old version keeps running.
 docker run --rm --network quickserve --env-file "$ENV_FILE" "$IMAGE" alembic upgrade head
 
-# 2. Swap the API and the worker to the new image. `docker stop` sends
+# 2. Swap the API, the worker and the notifier to the new image. `docker stop` sends
 #    SIGTERM and waits up to 20 s, so the worker finishes its current pass
 #    (`docker rm -f` would SIGKILL it straight away).
-docker stop -t 20 quickserve-api quickserve-worker >/dev/null 2>&1 || true
-docker rm quickserve-api quickserve-worker >/dev/null 2>&1 || true
+docker stop -t 20 quickserve-api quickserve-worker quickserve-notifier >/dev/null 2>&1 || true
+docker rm quickserve-api quickserve-worker quickserve-notifier >/dev/null 2>&1 || true
 docker run -d --name quickserve-api --network quickserve --env-file "$ENV_FILE" \
   --restart unless-stopped --memory 768m -p 80:8000 "$IMAGE"
 docker run -d --name quickserve-worker --network quickserve --env-file "$ENV_FILE" \
   --restart unless-stopped --memory 256m --no-healthcheck "$IMAGE" python -m app.worker
+docker run -d --name quickserve-notifier --network quickserve --env-file "$ENV_FILE" \
+  --restart unless-stopped --memory 192m --no-healthcheck "$IMAGE" python -m app.notifier
 
 docker image prune -f >/dev/null   # FinOps: old images fill the disk
 echo "deployed $IMAGE"

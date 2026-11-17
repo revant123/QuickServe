@@ -35,12 +35,13 @@ kubectl -n "$NS" wait --for=condition=complete job/migrate --timeout=300s
 # is a change in the YAML, so Kubernetes rolls the pods by itself.)
 if [[ -n "$ALREADY_DEPLOYED" && "$OVERLAY" != *ci* ]]; then
   echo "Restarting the API and worker to pick up the newest image..."
-  kubectl -n "$NS" rollout restart deployment/api deployment/worker
+  kubectl -n "$NS" rollout restart deployment/api deployment/worker deployment/notifier
 fi
 
-echo "Waiting for the API and the worker..."
+echo "Waiting for the API, the worker and the notifier..."
 kubectl -n "$NS" rollout status deployment/api --timeout=300s
 kubectl -n "$NS" rollout status deployment/worker --timeout=300s
+kubectl -n "$NS" rollout status deployment/notifier --timeout=300s
 
 echo "Waiting for Prometheus and Grafana..."
 kubectl -n "$NS" rollout status deployment/prometheus --timeout=180s

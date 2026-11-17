@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes, Terraform, Prometheus, Grafana, GitHub Actions. **101 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes, Terraform, Prometheus, Grafana, GitHub Actions. **126 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
 
 ---
 
@@ -30,6 +30,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
    - [AWS and Terraform (Phase 6)](#aws-and-terraform-phase-6)
    - [Kubernetes (Phase 7)](#kubernetes-phase-7)
    - [Monitoring (Phase 7b)](#monitoring-phase-7b)
+   - [Notifications and the outbox pattern (Phase 8)](#notifications-and-the-outbox-pattern-phase-8)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -123,7 +124,7 @@ python -m app.worker                # terminal 2 (venv active): runs the order t
 |---|---|
 | http://127.0.0.1:8000/health/ready | `{"status":"ready","database":"ok","redis":"ok"}` |
 | http://127.0.0.1:8000/docs | Swagger UI with every endpoint |
-| `pytest -q` (in another terminal, venv active) | `101 passed` |
+| `pytest -q` (in another terminal, venv active) | `126 passed` |
 
 ### Step 9: Place your first order in Swagger
 
@@ -174,6 +175,7 @@ Then open **http://127.0.0.1:8001/docs** (note **8001**, not 8000) and follow st
 | `migrate` | Runs `alembic upgrade head`, then exits | none |
 | `quickserve-api` | The API (`uvicorn`) | **8001** |
 | `quickserve-worker` | The order timeout job, every 30 seconds | none |
+| `quickserve-notifier` | Turns order events from the outbox into notifications (Phase 8) | none |
 
 The API uses **8001** so it can run at the same time as the developer-mode server on 8000, and none of these ports clash with QuickKart.
 
@@ -231,6 +233,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| Notification service with the outbox pattern (Phase 8) | [Outbox Q&A](#notifications-and-the-outbox-pattern-phase-8); `app/modules/outbox/`, `app/modules/notifications/`, `app/notifier.py`, `infra/k8s/base/notifier.yaml`, `tests/test_notifications.py` |
 | Monitoring and alerts (Phase 7b) | [Monitoring Q&A](#monitoring-phase-7b); `app/core/metrics.py`; `infra/k8s/monitoring/` (Prometheus config, `rules.yml` + `rules_test.yml`, Grafana dashboard); worker `--healthcheck`; `tests/test_metrics.py` |
 | Kubernetes (Phase 7) | [Kubernetes Q&A](#kubernetes-phase-7); `infra/k8s/` (Kustomize base + overlays, `deploy.sh`, `smoke_test.py`); `scripts/wait_for_migrations.py`; the `kubernetes` job in CI (kind cluster, zero-downtime rollout check) |
 | AWS infrastructure as code (Phase 6) | [AWS and Terraform Q&A](#aws-and-terraform-phase-6); `infra/` with [infra/README.md](infra/README.md); 18 `terraform test` checks; the `terraform` job in CI |
@@ -300,6 +303,9 @@ flowchart TB
     menu -->|"menu cache"| redisdb[("Redis 7")]
     authdep -->|"rate limits, logged-out tokens"| redisdb
     worker["app/worker.py: separate process, runs the timeout job every 30 s"] --> orders
+    orders -->|"outbox event, same transaction"| outboxt[("outbox_events table")]
+    notifier["app/notifier.py: separate process, the notifications service"] -->|"claims events"| outboxt
+    notifier --> notif["notifications module"]
 ```
 
 ### 3.2 Inside every module: four layers
@@ -493,7 +499,7 @@ flowchart LR
         pg["Start PostgreSQL 16 and Redis 7 service containers"] --> inst["pip install -r requirements-dev.lock"]
         inst --> lint["ruff check and ruff format --check"]
         lint --> mig["alembic upgrade head and alembic check"]
-        mig --> pyt["pytest: 101 tests"]
+        mig --> pyt["pytest: 126 tests"]
     end
 
     subgraph docker["job: docker"]
@@ -1650,13 +1656,149 @@ The trade-off is that metrics live on the pod's own disk (`emptyDir`) and vanish
 
 1. `promtool check config` and `promtool test rules` (the alert unit tests above).
 2. On the kind cluster, after the smoke test, a script in the cluster asks Prometheus:
-   - Is every API and worker pod being scraped?
+   - Is every API, worker and notifier pod being scraped?
    - Was the login from the smoke test counted?
    - Is the worker heartbeat fresh?
    - Do the recording rules produce numbers?
    - Is any alert firing? (None may be.)
-3. It asks Grafana whether the QuickServe dashboard loaded with all 20 panels.
+3. It asks Grafana whether the QuickServe dashboard loaded (25 panels, including the notifications row from Phase 8).
 4. It checks that the worker's liveness probe never restarted it.
+
+### Notifications and the outbox pattern (Phase 8)
+
+Every order step now notifies the right people, as Zomato and Swiggy do. The customer hears "Payment received", "Your food is being prepared", "On the way!". The restaurant hears "New order: ₹540, 2 item(s). Accept it within 4 minutes". The interesting part isn't the messages. It's making sure that **no notification is lost, none is sent twice, and none arrives out of order**, even when processes crash. That's the **transactional outbox** pattern, a classic system design interview topic.
+
+```mermaid
+sequenceDiagram
+    participant C as Customer app
+    participant API as API (orders module)
+    participant DB as PostgreSQL
+    participant N as Notifier (separate process)
+    C->>API: POST /orders/{id}/payments
+    API->>DB: BEGIN
+    API->>DB: UPDATE orders SET status = 'PAID'
+    API->>DB: INSERT INTO outbox_events (order.status_changed, PAID)
+    API->>DB: COMMIT (both or neither)
+    API-->>C: 201 Created
+    loop every 2 seconds
+        N->>DB: SELECT ... FOR UPDATE SKIP LOCKED (oldest waiting event per order)
+        N->>DB: INSERT notifications ... ON CONFLICT DO NOTHING
+        N->>DB: UPDATE outbox_events SET published_at = now()
+        N->>DB: COMMIT
+    end
+    C->>API: GET /notifications
+    API-->>C: "Payment received"
+```
+
+### Q: Why not just send the notification right after saving the order?
+
+Because that's two writes to two different systems, and they can't be made atomic: the **dual-write problem** [61].
+
+- **Save, then notify.** The process crashes in between, a deploy restarts it, or the push provider times out. The order is PAID, but the customer and the restaurant are never told. The restaurant never starts cooking, and the order is auto-rejected after 4 minutes.
+- **Notify, then save.** The save then fails or rolls back (stock ran out, a deadlock). The restaurant was told about an order that doesn't exist.
+
+Retrying doesn't fix either case. You just get "lost" or "sent twice" in different proportions.
+
+### Q: So what does the outbox do?
+
+It turns two writes into **one**. The orders code writes the event as a row in `outbox_events`, **inside the same transaction** as the status change. PostgreSQL then guarantees both are committed or neither is. A separate process, the **notifier**, reads waiting events and delivers them afterwards. If the notifier is down for an hour, events wait in the table and nothing is lost; it catches up when it's back. That's the pattern as Chris Richardson describes it [61].
+
+In the code:
+
+- `_publish()` in `app/modules/orders/service.py` is called from `place_order()` and from `_apply()`, which every status change goes through, so no change can skip it.
+- A test checks that an order that fails (out of stock) leaves **no** event. It rolled back together with the order, so nobody is told about a phantom order.
+
+### Q: What's in an event, and why so much?
+
+```json
+{"order_id": "…", "customer_id": "…", "owner_id": "…", "restaurant_name": "Pal Dhaba",
+ "status": "PAID", "previous_status": "PLACED", "actor": "system", "note": null,
+ "grand_total": "540.00", "item_count": 2}
+```
+
+Everything the notifications service needs to word its messages and pick the recipients. This is called **event-carried state transfer**. The notifications module never imports the orders module and never reads the `orders` or `restaurants` tables. That's what lets it become a truly separate service later, with its own database, without changing its logic.
+
+### Q: The notifier can crash halfway. Can a notification be sent twice?
+
+Delivery is **at-least-once**. Suppose the notifier handles an event and then dies before marking it published. Next time it handles the same event again. The answer is an **idempotent consumer**: handling the same message twice must have the same effect as handling it once [62].
+
+Here that's a database constraint. `notifications` has `UNIQUE (event_id, user_id)`, and the insert is `INSERT ... ON CONFLICT DO NOTHING RETURNING id`, so a repeat creates nothing and returns nothing. A test simulates the crash by marking delivered events as undelivered: the second pass handles both events again and creates **zero** new notifications.
+
+The same idea applies to real push or SMS providers. Send the provider an idempotency key (the event ID), and it drops the duplicate. That's the same trick QuickServe's own payments endpoint uses with `Idempotency-Key`.
+
+### Q: How do events of one order stay in order?
+
+The notifier only claims the **oldest waiting event of each order**. The query adds `NOT EXISTS (an earlier undelivered event for the same order)`. Suppose "PAID" fails, because the push provider timed out. Then "ACCEPTED" for that order waits behind it, so the customer can't hear "accepted" before "payment received". A test checks exactly this.
+
+Events of **different** orders don't wait for each other, so one broken order can't hold up everyone. In Kafka terms, the order ID is the partition key.
+
+### Q: What if two notifiers run at once?
+
+They share the work. Events are claimed with `SELECT ... FOR UPDATE SKIP LOCKED`, the same clause the timeout worker uses. One notifier locks a batch, and the other skips those rows and takes different ones instead of waiting. PostgreSQL's docs describe skipping locked rows as being for queue-like tables with several consumers [63]. Because of the per-order rule above, ordering still holds with several notifiers. A test runs two at once and checks that each event is delivered exactly once.
+
+### Q: What happens to an event that keeps failing?
+
+- **Retry with exponential backoff.** The next attempt is in 2 s, then 4, 8 and 16, up to 5 minutes. A struggling dependency gets breathing room instead of a retry storm.
+- **Dead-letter after 5 attempts.** The event gets `dead_at`, and its `last_error` is kept. It stops being retried, and the `QuickServeOutboxDeadLetters` alert fires.
+- **A dead event doesn't block its order forever.** Later events for that order continue.
+- **One bad event doesn't spoil the batch.** Each event is handled in its own **SAVEPOINT**, so a failure undoes only that event's work.
+
+To resend a dead event after fixing the cause, a person runs `UPDATE outbox_events SET dead_at = NULL, attempts = 0, available_at = now() WHERE id = …`.
+
+### Q: Who is told about what?
+
+| Order becomes | Customer | Restaurant |
+|---|---|---|
+| PLACED | "Order placed: pay ₹X to confirm" | nothing: an unpaid order may never happen |
+| PAID | "Payment received" | "New order: ₹X, N item(s). Accept within 4 minutes" |
+| ACCEPTED, PREPARING, READY, OUT_FOR_DELIVERY, DELIVERED | one message each | nothing |
+| PAYMENT_FAILED | "Order cancelled: payment not completed. No money was taken" | nothing |
+| REJECTED | "… couldn't take your order. Refund of ₹X started" | nothing (they rejected it) |
+| CANCELLED | "Order cancelled", plus the refund if it was paid | only if it was paid: they may already be cooking |
+
+The wording lives in `app/modules/notifications/templates.py`, with a test for each row.
+
+### Q: Polling every 2 seconds sounds wasteful. What are the alternatives?
+
+When idle, the notifier runs one cheap query every 2 seconds against a **partial index** that only contains waiting events. That index stays tiny no matter how many delivered events exist. A busy notifier doesn't sleep at all: a full batch means it immediately takes the next one.
+
+Two upgrades exist:
+
+- **PostgreSQL `LISTEN/NOTIFY`** wakes the notifier the moment an event is committed.
+- **Change data capture (CDC)** with **Debezium** reads new outbox rows from PostgreSQL's write-ahead log and publishes them to Kafka, with no polling at all [64].
+
+That's the usual path when the notifications service moves to its own database. The outbox table and the consumer stay the same, and only the relay changes.
+
+### Q: Doesn't the outbox table grow forever?
+
+No. Delivered events are deleted after 7 days (`outbox_retention_days`), in batches of 1,000 so each delete is short. The notifications themselves are kept. That's FinOps for databases: a table nobody reads still costs storage, backup time and slower vacuums.
+
+### Q: How do I know the notifier is healthy?
+
+It's a separate Deployment with the same production habits as the worker:
+
+- **Heartbeat liveness probe.** `python -m app.notifier --healthcheck` restarts the notifier only if its loop is stuck, not when deliveries fail.
+- **Metrics on port 9102**, which Prometheus scrapes:
+  - events waiting, and the age of the oldest one;
+  - dead letters;
+  - events processed by outcome;
+  - notifications by kind.
+- **Three new alerts, unit-tested with promtool:**
+  - `QuickServeNotifierDown`: events pile up, though none are lost;
+  - `QuickServeNotificationsDelayed`: the oldest waiting event is over a minute old for 5 minutes;
+  - `QuickServeOutboxDeadLetters`.
+- **A new "Notifications (outbox)" row** on the Grafana dashboard.
+
+In CI, the Kubernetes smoke test places and pays for a real order and waits until `GET /notifications` shows "Payment received" for it. That covers the whole path: API, outbox, notifier and notifications API.
+
+### Q: Try it
+
+With the app running (Docker Compose, minikube or `uvicorn` plus `python -m app.notifier`):
+
+1. In Swagger, log in as `customer@quickserve.dev`, place an order and pay for it.
+2. Call `GET /api/v1/notifications`: "Payment received" and "Order placed" are there within a couple of seconds.
+3. Log in as `owner@quickserve.dev`: "New order: ₹…" is waiting.
+4. Stop the notifier (`docker stop quickserve-notifier`, or `kubectl -n quickserve scale deploy/notifier --replicas=0`). Place another order: no notification appears. Then start the notifier again: the waiting events are delivered. Nothing was lost.
 
 ---
 
@@ -1680,7 +1822,7 @@ PostgreSQL 16 and Redis 7 always, the same major versions as CI and, later, AWS.
 | `ruff check` and `ruff format --check` | Style arguments end; obvious bugs (unused imports, shadowed names) caught before review |
 | `alembic upgrade head` + `alembic check` | **Fails if someone changed a model but forgot to create a migration**, a very common production incident |
 | PostgreSQL 16 and Redis 7 **service containers** | Tests run against the same database and cache as production |
-| `pytest` | All 101 tests, including the concurrency, login-attack and Redis-outage tests |
+| `pytest` | All 126 tests, including the concurrency, login-attack and Redis-outage tests |
 | `concurrency: cancel-in-progress` | Two quick pushes cancel the older run instead of paying for both |
 | `timeout-minutes: 10` | A hung job can't burn CI minutes forever |
 | A second job, `docker`, in parallel | Builds the image and smoke-tests the whole stack in containers ([details](#q-what-does-the-ci-docker-job-prove-that-the-tests-dont)) |
@@ -1854,6 +1996,7 @@ quickserve/
 │   │   ├── session.py            engine, pool, get_db(), transaction()
 │   │   └── models.py             imports every model (for Alembic)
 │   ├── worker.py                 background worker: runs the order timeout job
+│   ├── notifier.py               notifier: delivers outbox events as notifications (Phase 8)
 │   └── modules/                  one folder per business area (modular monolith)
 │       ├── auth/                 login, logout, get_current_user, require_roles,
 │       │                         rate_limit (Redis), revocation (Redis)
@@ -1862,14 +2005,16 @@ quickserve/
 │       ├── menu/                 model (MenuItem, InventoryCycle), repository, service, cache,
 │       │                         analytics (ORM + raw SQL versions), schema, router
 │       ├── orders/               model, state_machine, pricing, repository, service, schema, router
-│       └── payments/             model, service, refunds (public interface), schema, router
+│       ├── payments/             model, service, refunds (public interface), schema, router
+│       ├── outbox/               OutboxEvent model; record(), claim_batch(), retry backoff, retention
+│       └── notifications/        model, templates (who is told what), service, schema, router
 ├── migrations/                   Alembic env + versions
 ├── scripts/
 │   ├── seed.py                   demo data
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        101 tests, real PostgreSQL and Redis
+├── tests/                        126 tests, real PostgreSQL and Redis
 ├── infra/                        Terraform for AWS (Phase 6); start with infra/README.md
 │   ├── k8s/                      Kubernetes (Phase 7): base/ manifests, overlays/local and ci, deploy.sh
 │   │   └── monitoring/           Prometheus config, alert rules + their tests, Grafana dashboard (Phase 7b)
@@ -1914,6 +2059,8 @@ quickserve/
 | POST | `/orders/{id}/payments` | its customer | Mock payment; needs `Idempotency-Key`; `?simulate=failure` to test failures |
 | GET | `/orders/{id}/payments`, `/payments/{id}` | same as the order | Payment attempts |
 | POST | `/admin/jobs/order-timeouts` | admin | Run the timeout job by hand |
+| GET | `/notifications?unread_only=true` | logged in | Your notifications, newest first |
+| POST | `/notifications/{id}/read` | the notification's owner | Mark one as read (someone else's: `404`) |
 | GET | `/health`, `/health/ready` | anyone | Liveness, readiness |
 
 ---
@@ -1931,11 +2078,14 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **6. AWS and Terraform** (code done and tested; applying it is your call) | Budget alert and S3 state bucket (bootstrap), VPC with public/private subnets and no NAT, RDS PostgreSQL 16, Parameter Store secrets, one Graviton EC2 server running the ghcr.io image, Session Manager instead of SSH, 18 mock-based `terraform test` checks in CI | IAM least privilege, public vs private subnets, remote state and locking, IMDSv2, `plan`/`apply`/`destroy` |
 | **7. Kubernetes** (done) | Kustomize manifests for minikube: Deployments, StatefulSet, Services, migration Job with wait-for-migrations init containers, ConfigMap and Secret, HPA, PDB, probes wired to `/health` and `/health/ready`, locked-down pods; CI deploys to kind and checks a zero-downtime rollout and self-healing | Requests vs limits, liveness vs readiness, rolling updates, what happens when a pod dies |
 | **7b. Monitoring** (done) | Prometheus metrics on a private port (RED + business + worker heartbeat), counters that move only after commit, Prometheus with recording and alert rules (unit-tested with promtool), a Grafana dashboard with cost per order, CI that checks scraping, alerts and the dashboard | The four golden signals, percentiles, cardinality, alert fatigue, unit metrics |
-| **8. FinOps and services** (next) | OpenCost feeding real cost into the cost-per-order panel, rightsizing requests from measured use, Alertmanager; split out the notification service driven by `order_status_events` | Unit economics, showback, event-driven design, the outbox pattern |
+| **8. Notification service** (done) | Transactional outbox written with every order change, a separate notifier process (own Deployment, metrics, liveness, alerts) that turns events into notifications: per-order ordering, retries with backoff, dead letters, idempotent consumer, retention; notifications API | Dual writes, the outbox pattern, at-least-once delivery, idempotency, poison messages, event-carried state |
+| **8b. FinOps** (next) | OpenCost feeding real cost into the cost-per-order panel, rightsizing requests from measured use, Alertmanager sending alert emails | Unit economics, showback, rightsizing |
 
 ---
 
 ## 14. Interview cheat sheet
+
+**How do you notify another service reliably when data changes?** The transactional outbox. Write the event to an `outbox_events` table in the same transaction as the change, so both commit or neither does. A separate relay delivers it later. Delivery is at-least-once, so the consumer must be idempotent: QuickServe uses a unique `(event_id, user_id)` constraint with `ON CONFLICT DO NOTHING`. Keep per-entity order by claiming only the oldest waiting event per order. Failures are retried with backoff and dead-lettered after 5 attempts.
 
 **How do you prevent overselling?** A single conditional UPDATE (`consumed = consumed + q WHERE consumed + q <= stock RETURNING ...`). The check and the write happen together under the row lock; the second racer re-checks the WHERE clause against the committed row and gets nothing. A CHECK constraint guards against impossible values, but it can't prevent lost updates. Our race demo showed 40 orders accepted for 10 units with the naive version.
 
@@ -2049,3 +2199,7 @@ Business and tax figures change often; the dates show when each was reported.
 58. AWS, *Amazon Managed Service for Prometheus pricing* (example: 10 nodes, 1,000 metrics each, every 30 s, ingestion about USD 80.93 a month). https://aws.amazon.com/prometheus/pricing/
 59. OpenCost (CNCF project): real-time Kubernetes cost allocation, exported to Prometheus. https://opencost.io/
 60. Prometheus documentation, *Unit testing for rules* (`promtool test rules`). https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/
+61. Chris Richardson, *Pattern: Transactional outbox*, microservices.io. https://microservices.io/patterns/data/transactional-outbox.html
+62. Chris Richardson, *Pattern: Idempotent Consumer*, microservices.io (at-least-once delivery means a handler can run more than once for the same message). https://microservices.io/patterns/communication-style/idempotent-consumer.html
+63. PostgreSQL documentation, *SELECT: the locking clause* (SKIP LOCKED for queue-like tables with multiple consumers). https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE
+64. Debezium documentation, *Outbox Event Router* (CDC-based outbox relay to Kafka). https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html

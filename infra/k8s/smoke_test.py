@@ -6,7 +6,9 @@ It runs INSIDE the cluster, so it reaches the API through its Service name
     kubectl -n quickserve exec -i deploy/worker -- python - check    < infra/k8s/smoke_test.py
     kubectl -n quickserve exec -i deploy/worker -- python - watch 60 < infra/k8s/smoke_test.py
 
-check       health, login as the demo customer, call /users/me (needs the seed data)
+check       health, login as the demo customer, call /users/me, then place and pay
+            for an order and wait for the notifier to deliver "Payment received"
+            (needs the seed data)
 watch N     hit /health/ready 5 times a second for N seconds and count failures.
             Run it during `kubectl rollout restart deployment/api`: 0 failures
             means the rolling update caused no downtime.
@@ -32,6 +34,47 @@ def get(path, token=None, timeout=3):
         return resp.status, json.loads(resp.read() or b"null")
 
 
+def post(path, body, token, headers=None):
+    req = urllib.request.Request(
+        BASE + path, data=json.dumps(body).encode() if body is not None else b"", method="POST"
+    )
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return resp.status, json.loads(resp.read() or b"null")
+
+
+def order_and_notification(token):
+    """The outbox end to end: order -> payment -> event -> notifier -> notification."""
+    _, restaurants = get("/api/v1/restaurants")
+    restaurants = restaurants["items"] if isinstance(restaurants, dict) else restaurants
+    for r in restaurants:
+        _, menu = get(f"/api/v1/restaurants/{r['id']}/menu")
+        dish = next((m for m in menu if m.get("available") is None or m["available"] > 0), None)
+        if dish:
+            break
+    else:
+        raise AssertionError("no dish available to order")
+    body = {
+        "restaurant_id": r["id"],
+        "delivery_address": "Smoke test",
+        "items": [{"menu_item_id": dish["id"], "quantity": 1}],
+    }
+    _, order = post("/api/v1/orders", body, token)
+    status, _ = post(f"/api/v1/orders/{order['id']}/payments", None, token, {"Idempotency-Key": f"smoke-{order['id']}"})
+    assert status in (200, 201), status
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        _, notes = get("/api/v1/notifications", token)
+        if any(n["order_id"] == order["id"] and n["title"] == "Payment received" for n in notes):
+            print("notification delivered: Payment received, for order", order["id"])
+            return
+        time.sleep(1)
+    raise AssertionError("the notifier didn't deliver 'Payment received' within 30 s")
+
+
 def check():
     status, body = get("/health/ready")
     assert status == 200 and body["database"] == "ok", body
@@ -45,6 +88,8 @@ def check():
     assert status == 200 and me["email"] == "customer@quickserve.dev", me
     print("logged in as:", me["email"], me["role"])
 
+    order_and_notification(token)
+
 
 def prom(query):
     url = "http://prometheus:9090/api/v1/query?" + urllib.parse.urlencode({"query": query})
@@ -55,7 +100,8 @@ def prom(query):
 def monitoring(timeout=120):
     deadline = time.monotonic() + timeout
     checks = {
-        "every API and worker pod is scraped": 'count(up{job="quickserve"} == 1) >= 3',
+        "every API, worker and notifier pod is scraped": 'count(up{job="quickserve"} == 1) >= 4',
+        "the notifier delivered the smoke test's events": 'sum(quickserve_outbox_events_processed_total{outcome="published"}) >= 2',
         "the login from `check` was counted": 'sum(quickserve_logins_total{outcome="success"}) >= 1',
         "the worker heartbeat is fresh": "time() - max(quickserve_worker_last_run_timestamp_seconds) < 120",
         "the recording rules run": "quickserve:infra_cost_usd:per_hour",

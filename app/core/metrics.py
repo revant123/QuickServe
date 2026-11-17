@@ -75,6 +75,21 @@ WORKER_LAST_SUCCESS = Gauge(
     "quickserve_worker_last_success_timestamp_seconds", "When the timeout job last finished without an error"
 )
 
+# ---------- Notifier and outbox (Phase 8) ----------
+
+OUTBOX_PENDING = Gauge("quickserve_outbox_pending_events", "Outbox events waiting to be delivered")
+OUTBOX_OLDEST_AGE = Gauge(
+    "quickserve_outbox_oldest_pending_age_seconds", "How long the oldest waiting event has waited (0 if none)"
+)
+OUTBOX_DEAD = Gauge("quickserve_outbox_dead_events", "Events the notifier gave up on (need a human)")
+OUTBOX_PROCESSED = Counter(
+    "quickserve_outbox_events_processed_total", "Outbox events handled, by outcome", ["outcome"]
+)  # published / retry / dead
+NOTIFICATIONS_CREATED = Counter("quickserve_notifications_created_total", "Notifications created, by kind", ["kind"])
+NOTIFIER_LAST_RUN = Gauge(
+    "quickserve_notifier_last_run_timestamp_seconds", "When the notifier loop last ran (heartbeat)"
+)
+
 # ---------- Infrastructure ----------
 
 DB_POOL_IN_USE = Gauge("quickserve_db_pool_connections_in_use", "Database connections currently checked out")

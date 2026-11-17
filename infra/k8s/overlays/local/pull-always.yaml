@@ -35,6 +35,20 @@ spec:
         - name: worker
           imagePullPolicy: Always
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifier
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: wait-for-migrations
+          imagePullPolicy: Always
+      containers:
+        - name: notifier
+          imagePullPolicy: Always
+---
 apiVersion: batch/v1
 kind: Job
 metadata:

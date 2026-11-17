@@ -116,6 +116,7 @@ jobs:
 
           # The worker started and the migration job finished successfully
           docker compose --profile app logs worker | grep -q "worker started"
+          docker compose --profile app logs notifier | grep -q "notifier started"
           test "$(docker inspect -f '{{.State.ExitCode}}' "$(docker compose --profile app ps -aq migrate)")" = "0"
 
       - name: Worker stops cleanly on SIGTERM

@@ -1,0 +1,86 @@
+# The notifier (Phase 8): reads the outbox and turns order events into
+# notifications. Same image, its own command, deployed and scaled on its own,
+# like a separate service would be. No Service object: nobody calls it; it only
+# reads from the database.
+#
+# One replica is enough. More would be safe: events are claimed with
+# FOR UPDATE SKIP LOCKED, and an order's next event waits for the previous one,
+# so events still arrive in order.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifier
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notifier
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: notifier
+      annotations:
+        prometheus.io/scrape: "true"
+    spec:
+      terminationGracePeriodSeconds: 30 # finishes its current batch on SIGTERM
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wait-for-migrations
+          image: quickserve
+          command: ["python", "-m", "scripts.wait_for_migrations", "--timeout", "300"]
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      containers:
+        - name: notifier
+          image: quickserve
+          command: ["python", "-m", "app.notifier"]
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          ports:
+            - name: metrics
+              containerPort: 9102
+          # Restart only if the loop is STUCK (no heartbeat for 80 s). Failing
+          # deliveries are retried and alerted on, not "fixed" by restarting.
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "app.notifier", "--healthcheck"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 192Mi

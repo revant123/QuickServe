@@ -51,7 +51,7 @@ TEST_PASSWORD = "test-password-123"
 # Argon2 is slow ON PURPOSE (that is what makes stolen hashes hard to crack), so hash
 # the shared test password once instead of once per test user.
 TEST_PASSWORD_HASH = hash_password(TEST_PASSWORD)
-TABLES = "payments, order_status_events, order_items, orders, inventory_cycles, menu_items, restaurants, users"
+TABLES = "notifications, outbox_events, payments, order_status_events, order_items, orders, inventory_cycles, menu_items, restaurants, users"
 
 # Safety guard: these tests TRUNCATE every table. Refuse to run against anything
 # that isn't clearly a test database (e.g. if DATABASE_URL in your shell points

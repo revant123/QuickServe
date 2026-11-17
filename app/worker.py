@@ -85,21 +85,24 @@ def _handle_signal(signum, _frame) -> None:
     stop_requested.set()
 
 
-def heartbeat_age_seconds(port: int) -> float | None:
-    """Seconds since the running worker's last pass, read from its metrics port."""
+HEARTBEAT_METRIC = "quickserve_worker_last_run_timestamp_seconds"
+
+
+def heartbeat_age_seconds(port: int, metric: str = HEARTBEAT_METRIC) -> float | None:
+    """Seconds since a running loop's last pass, read from its metrics port."""
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=3) as resp:
         text = resp.read().decode()
     for family in text_string_to_metric_families(text):
-        if family.name == "quickserve_worker_last_run_timestamp_seconds" and family.samples:
+        if family.name == metric and family.samples:
             return time.time() - family.samples[0].value
     return None
 
 
-def healthcheck(port: int, max_age_seconds: float) -> bool:
-    """True if the worker on this machine finished a pass recently enough."""
+def healthcheck(port: int, max_age_seconds: float, metric: str = HEARTBEAT_METRIC) -> bool:
+    """True if the loop on this machine (worker or notifier) beat recently enough."""
     try:
-        age = heartbeat_age_seconds(port)
-    except OSError:  # nothing listening: the worker isn't running
+        age = heartbeat_age_seconds(port, metric)
+    except OSError:  # nothing listening: the process isn't running
         return False
     return age is not None and age <= max_age_seconds
 
