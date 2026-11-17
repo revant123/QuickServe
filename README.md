@@ -51,10 +51,12 @@ cd quickserve
 
 ```bash
 docker compose up -d       # starts PostgreSQL 16; on first start it also creates quickserve and quickserve_test
-docker compose ps          # wait until STATUS shows "healthy"
+docker compose ps          # wait until STATUS shows "healthy" and PORTS shows 0.0.0.0:5433->5432/tcp
 ```
 
-**Option B: without Docker.** Install PostgreSQL 16, make sure user `postgres` has password `postgres` (or edit `DATABASE_URL` in `.env` in step 4), then create the two databases:
+QuickServe's database listens on port **5433** on your machine, not the usual 5432. That way it can run at the same time as another project's PostgreSQL (QuickKart, say) that already uses 5432.
+
+**Option B: without Docker.** Install PostgreSQL 16, make sure user `postgres` has password `postgres`, then create the two databases. Your own PostgreSQL normally listens on 5432, so in step 4 change the port in `DATABASE_URL` from `5433` to `5432`.
 
 ```bash
 psql -U postgres -c "CREATE DATABASE quickserve;"
@@ -133,9 +135,10 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 
 | Error | Fix |
 |---|---|
-| `Connection refused` on port 5432 | PostgreSQL isn't running. `docker compose ps`, or start your local PostgreSQL service |
+| `Connection refused` on port 5433 | PostgreSQL isn't running. `docker compose ps`, or start your local PostgreSQL service (and set port 5432 in `.env`) |
 | `password authentication failed` | The user or password in `DATABASE_URL` (in `.env`) doesn't match your PostgreSQL |
-| `port is already allocated` (Docker) | A local PostgreSQL already uses 5432. Stop it, or change `"5432:5432"` to `"5433:5432"` in `docker-compose.yml` and use port 5433 in `.env` |
+| `password authentication failed for user "postgres"` | The app is reaching a different PostgreSQL than QuickServe's. Check that `.env` uses port **5433** (copy `.env.example` again if you made `.env` earlier) and that `docker compose ps` shows `0.0.0.0:5433->5432/tcp` |
+| `port is already allocated` (Docker) | Something else already uses 5433. Pick a free port, e.g. `"5434:5432"` in `docker-compose.yml`, and the same number in `.env` |
 | `database "quickserve_test" does not exist` | The Docker init script runs only on the very first start. Run `docker compose exec db psql -U postgres -c "CREATE DATABASE quickserve_test;"` |
 | `ModuleNotFoundError: No module named 'app'` | Run commands from the repository root with the venv activated |
 | PowerShell won't run `Activate.ps1` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, then try again |

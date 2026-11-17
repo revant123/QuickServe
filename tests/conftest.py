@@ -9,7 +9,17 @@ version in a service container.
 
 import os
 
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/quickserve_test")
+from sqlalchemy.engine import make_url  # noqa: E402
+
+from app.core.config import Settings  # noqa: E402
+
+# Tests use the same server, port and credentials as your app (from .env), but a
+# separate database: <your database>_test. CI sets DATABASE_URL itself.
+if "DATABASE_URL" not in os.environ:
+    _app_url = make_url(Settings().database_url)
+    os.environ["DATABASE_URL"] = _app_url.set(database=f"{_app_url.database}_test").render_as_string(
+        hide_password=False
+    )
 
 from decimal import Decimal  # noqa: E402
 

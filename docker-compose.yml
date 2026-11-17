@@ -16,7 +16,10 @@ services:
       POSTGRES_PASSWORD: postgres    # local only; real secrets come from a secrets manager in Phase 6
       POSTGRES_DB: quickserve
     ports:
-      - "5432:5432"
+      # Your Mac's port 5433 -> port 5432 inside the container.
+      # 5433, not 5432, so QuickServe can run alongside other projects
+      # (like QuickKart) whose PostgreSQL already uses 5432 on the host.
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./scripts/create_test_db.sql:/docker-entrypoint-initdb.d/create_test_db.sql:ro
