@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Alembic, pytest, GitHub Actions. **59 tests**, all run against a real PostgreSQL, including concurrency tests with real threads and attacks on the login system.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, GitHub Actions. **81 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
 
 ---
 
@@ -25,13 +25,14 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
 5. [ORM vs writing SQL by hand](#5-orm-vs-writing-sql-by-hand)
 6. [Business rules borrowed from Zomato and Swiggy](#6-business-rules-borrowed-from-zomato-and-swiggy)
 7. [Login, tokens and permissions](#7-login-tokens-and-permissions)
-8. [DevOps already in the project](#8-devops-already-in-the-project)
-9. [FinOps: thinking in cost per order](#9-finops-thinking-in-cost-per-order)
-10. [Bugs the tests caught while building this](#10-bugs-the-tests-caught-while-building-this)
-11. [Project structure and API](#11-project-structure-and-api)
-12. [Roadmap](#12-roadmap)
-13. [Interview cheat sheet](#13-interview-cheat-sheet)
-14. [References](#14-references)
+8. [Redis, the background worker and logs (Phase 4)](#8-redis-the-background-worker-and-logs-phase-4)
+9. [DevOps already in the project](#9-devops-already-in-the-project)
+10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
+11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
+12. [Project structure and API](#12-project-structure-and-api)
+13. [Roadmap](#13-roadmap)
+14. [Interview cheat sheet](#14-interview-cheat-sheet)
+15. [References](#15-references)
 
 ---
 
@@ -51,7 +52,7 @@ cd quickserve
 **Option A: with Docker (recommended)**
 
 ```bash
-docker compose up -d       # starts PostgreSQL 16; on first start it also creates quickserve and quickserve_test
+docker compose up -d       # starts PostgreSQL 16 and Redis 7; on first start it also creates quickserve and quickserve_test
 docker compose ps          # wait until STATUS shows "healthy" and PORTS shows 0.0.0.0:5434->5432/tcp
 ```
 
@@ -100,19 +101,20 @@ python -m scripts.seed
 
 This creates two restaurants with menus and four demo accounts (customer, restaurant owner, rider, admin), and prints their emails and passwords.
 
-### Step 7: Start the API
+### Step 7: Start the API and the worker
 
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload       # terminal 1: the API
+python -m app.worker                # terminal 2 (venv active): runs the order timeout job every 30 seconds
 ```
 
 ### Step 8: Check it works
 
 | Open or run | You should see |
 |---|---|
-| http://127.0.0.1:8000/health/ready | `{"status":"ready","database":"ok"}` |
+| http://127.0.0.1:8000/health/ready | `{"status":"ready","database":"ok","redis":"ok"}` |
 | http://127.0.0.1:8000/docs | Swagger UI with every endpoint |
-| `pytest -q` (in a second terminal, venv active) | `59 passed` |
+| `pytest -q` (in another terminal, venv active) | `81 passed` |
 
 ### Step 9: Place your first order in Swagger
 
@@ -151,7 +153,9 @@ python -m scripts.race_demo        # watch a naive stock counter oversell, next 
 python -m scripts.show_sql         # print the SQL the ORM generates for our key queries
 ruff check . && ruff format --check .
 alembic upgrade head --sql         # print a migration's SQL without running it
-docker compose down                # stop PostgreSQL (add -v to also delete its data)
+docker compose down                # stop PostgreSQL and Redis (add -v to also delete the data)
+docker compose exec redis redis-cli --scan   # list what's in Redis right now
+python -m app.worker --once        # run the timeout job one time
 ```
 
 Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in the terminal. It's the fastest way to learn what the ORM is doing.
@@ -165,9 +169,10 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | `password authentication failed for user "postgres"` | The app is reaching a different PostgreSQL than QuickServe's. Check that `.env` uses port **5434** (copy `.env.example` again if you made `.env` earlier) and that `docker compose ps` shows `0.0.0.0:5434->5432/tcp` |
 | `port is already allocated` (Docker) | Something else already uses 5434. Pick a free port, e.g. `"5435:5432"` in `docker-compose.yml`, and the same number in `.env` |
 | `database "quickserve_test" does not exist` | The Docker init script runs only on the very first start. Run `docker compose exec db psql -U postgres -c "CREATE DATABASE quickserve_test;"` |
+| `/health/ready` says `"redis": "down ..."` | The app still works without Redis (no cache, no login limits). Check `docker compose ps` shows `quickserve-redis` healthy with `0.0.0.0:6380->6379/tcp`, and that `.env` has `REDIS_URL=redis://localhost:6380/0` (copy it from `.env.example`) |
 | `ModuleNotFoundError: No module named 'app'` | Run commands from the repository root with the venv activated |
 | PowerShell won't run `Activate.ps1` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, then try again |
-| Tests say `Refusing to run tests against database ...` | Safety guard: tests empty their database, so they only run on a database whose name ends in `_test`. Unset any `DATABASE_URL` you exported in your shell |
+| Tests say `Refusing to run tests ...` | Safety guard: tests empty their database, so they only run on a database whose name ends in `_test` and on Redis database number 15. Unset any `DATABASE_URL` or `REDIS_URL` you exported in your shell |
 
 ---
 
@@ -176,25 +181,27 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Requirement | Where it lives |
 |---|---|
 | Focus on how the ORM compares with writing SQL by hand | [Section 5](#5-orm-vs-writing-sql-by-hand); `app/modules/menu/analytics.py` (same report in ORM and raw SQL, tested equal); `scripts/show_sql.py`; `scripts/race_demo.py`; `tests/test_orm_behaviour.py` |
-| DevOps and FinOps as the top priority | [Section 8](#8-devops-already-in-the-project) and [Section 9](#9-finops-thinking-in-cost-per-order); `.github/workflows/ci.yml`; `docker-compose.yml`; health checks; connection pool settings; lock file |
+| DevOps and FinOps as the top priority | [Section 9](#9-devops-already-in-the-project) and [Section 10](#10-finops-thinking-in-cost-per-order); `.github/workflows/ci.yml`; `docker-compose.yml`; health checks; connection pool settings; lock file |
 | Real business logic from Zomato / Swiggy | [Section 6](#6-business-rules-borrowed-from-zomato-and-swiggy): accept timeout, out-of-stock-until, itemised bill with platform fee and GST, cancellation rules, idempotent payments |
 | Stock + consumer logic instead of QuickKart's `stock - 1` | [Section 4](#4-the-inventory-design-stock-consumed-and-cycles); `app/modules/menu/model.py` |
 | Restock resets the consumer counter to zero | `restock()` in `app/modules/menu/service.py`, which archives the cycle first so no data is lost |
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| Redis cache, rate limiting, logout, worker, JSON logs (Phase 4) | [Section 8](#8-redis-the-background-worker-and-logs-phase-4); `app/core/redis.py`, `app/core/logging.py`, `app/worker.py`, `app/modules/menu/cache.py` |
 | Everything in the README, as natural questions and answers | This file |
 
 **What's built so far, and what isn't:**
 
 | Area | Done | Not yet |
 |---|---|---|
-| Users and login | Registration, login with JWT access tokens, four roles (customer, restaurant owner, rider, admin), ownership checks on every restaurant and order, Argon2 password hashing via pwdlib as FastAPI's docs recommend [4] (passlib stopped working on Python 3.13 [23]) | Refresh tokens, logout, login rate limiting |
+| Users and login | Registration, login with JWT access tokens, logout, login rate limiting (Redis), four roles (customer, restaurant owner, rider, admin), ownership checks on every restaurant and order, Argon2 password hashing via pwdlib as FastAPI's docs recommend [4] (passlib stopped working on Python 3.13 [23]) | Refresh tokens |
 | Restaurants | Create, list with pagination, packaging charge | Opening hours, delivery radius |
 | Menu and stock | Stock/consumed counters, stock cycles with archive, restock with or without carry-over, "out of stock until" timer, customer badges ("Only 3 left", "Selling fast") | Add-ons and variants (half/full plate) |
 | Orders | All-or-nothing placement, itemised bill, price snapshots, status machine with actor rules, cancellation rules, full timeline | Rider assignment, ETA |
 | Payments | Mock gateway, idempotency keys, one-success-per-order rule, refunds on rejection/cancellation | Real gateway, webhooks |
-| Background jobs | Expire unpaid orders, auto-reject orders the restaurant didn't accept (`FOR UPDATE SKIP LOCKED`) | A scheduler (today you trigger it via an endpoint) |
+| Background jobs | A separate worker (`python -m app.worker`) expires unpaid orders and auto-rejects orders the restaurant didn't accept, every 30 seconds; safe to run several (`FOR UPDATE SKIP LOCKED`); graceful shutdown | |
+| Caching and logs | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses | Metrics and dashboards (Phase 7) |
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
 | DevOps | Alembic migrations (tested up and down), PostgreSQL in Docker Compose, CI pipeline, liveness/readiness checks, pinned and locked dependencies | Dockerfile for the app, AWS, Terraform, Kubernetes |
 
@@ -222,7 +229,7 @@ flowchart TB
             orders["orders: placement, bill, state machine, timeout job"]
             pay["payments: mock gateway, idempotency, refunds"]
         end
-        core["core: config, security, exceptions, money"]
+        core["core: config, security, redis, logging, exceptions, money"]
         dbl["database: engine, connection pool, sessions"]
     end
 
@@ -242,6 +249,9 @@ flowchart TB
     orders --> dbl
     pay --> dbl
     dbl -->|"pooled connections"| pg[("PostgreSQL 16")]
+    menu -->|"menu cache"| redisdb[("Redis 7")]
+    authdep -->|"rate limits, logged-out tokens"| redisdb
+    worker["app/worker.py: separate process, runs the timeout job every 30 s"] --> orders
 ```
 
 ### 3.2 Inside every module: four layers
@@ -430,7 +440,7 @@ flowchart LR
     pg --> inst["pip install -r requirements-dev.lock"]
     inst --> lint["ruff check and ruff format --check"]
     lint --> mig["alembic upgrade head and alembic check"]
-    mig --> test["pytest: 59 tests"]
+    mig --> test["pytest: 81 tests"]
     test --> ok{"all green?"}
     ok -->|yes| merge["safe to merge"]
     ok -->|no| fix["fix before merging"]
@@ -468,7 +478,7 @@ flowchart TB
     prom -.->|"scrape metrics"| app2
 ```
 
-Only PostgreSQL is in Docker today; everything in this last diagram is the plan for the phases in the [roadmap](#12-roadmap).
+Only PostgreSQL and Redis are in Docker today; the rest of this last diagram is the plan for the phases in the [roadmap](#13-roadmap).
 
 ---
 
@@ -657,7 +667,7 @@ Both look almost identical in Python. The first loses updates under concurrency;
 Three things, all demonstrated in `tests/test_orm_behaviour.py`:
 
 1. **Hidden queries (N+1).** Default lazy loading turns a loop over 50 restaurants into 51 queries. We set `lazy="raise"` so that mistake fails in development.
-2. **The identity map can serve stale data.** Within one session, each row is one Python object. If you hold an object and the row changes underneath you (another request, a script), **selecting it again returns the same object with the old values**. SQLAlchemy doesn't overwrite already-loaded objects unless you ask with `populate_existing`, `refresh()` or `expire()` [2]. This is especially dangerous with `SELECT ... FOR UPDATE`: you lock the row but read stale values, a known pitfall [3]. Every locking query in QuickServe uses `populate_existing=True` for this reason. (One of our own tests once passed by accident because of this; see section 10.)
+2. **The identity map can serve stale data.** Within one session, each row is one Python object. If you hold an object and the row changes underneath you (another request, a script), **selecting it again returns the same object with the old values**. SQLAlchemy doesn't overwrite already-loaded objects unless you ask with `populate_existing`, `refresh()` or `expire()` [2]. This is especially dangerous with `SELECT ... FOR UPDATE`: you lock the row but read stale values, a known pitfall [3]. Every locking query in QuickServe uses `populate_existing=True` for this reason. (One of our own tests once passed by accident because of this; see section 11.)
 3. **Autogenerate is a draft, not the truth.** Alembic's generated migration created PostgreSQL ENUM types in `upgrade()` but didn't drop them in `downgrade()`, so downgrade-then-upgrade failed with "type already exists". The fix was added by hand, and the test suite now runs downgrade and upgrade on every run. Always read a generated migration before committing it.
 
 ### Q: How do I see the SQL the ORM generates?
@@ -747,7 +757,7 @@ No. The client sends an `Idempotency-Key` header. A `UNIQUE` constraint on that 
 CREATE UNIQUE INDEX uq_payments_one_success_per_order ON payments (order_id) WHERE status = 'SUCCESS';
 ```
 
-Failed attempts are kept, and the customer can retry with a new key until `pay_by`. A concurrency test found a real bug here; see section 10.
+Failed attempts are kept, and the customer can retry with a new key until `pay_by`. A concurrency test found a real bug here; see section 11.
 
 ---
 
@@ -865,8 +875,8 @@ Alembic's autogenerate **doesn't notice** a new value in a Python `Enum`. It wou
 | Missing | Why it matters | When |
 |---|---|---|
 | Refresh tokens | Today you log in again every 30 minutes | Later |
-| Logout / revoking a token | A leaked token works until it expires | Phase 4: a Redis "deny list" of token ids, each kept only until the token would have expired anyway |
-| Rate limiting on login | Someone could try thousands of passwords | Phase 4: Redis counters per email and per IP |
+| ~~Logout / revoking a token~~ | ~~A leaked token works until it expires~~ | **Done in Phase 4** ([section 8](#8-redis-the-background-worker-and-logs-phase-4)) |
+| ~~Rate limiting on login~~ | ~~Someone could try thousands of passwords~~ | **Done in Phase 4** ([section 8](#8-redis-the-background-worker-and-logs-phase-4)) |
 | HTTPS | Tokens and passwords must never travel in plain text | Phase 6: TLS at the load balancer |
 | Rider assignment | Any rider can deliver any READY order | Later |
 
@@ -890,15 +900,156 @@ These are for local development only.
 
 ---
 
-## 8. DevOps already in the project
+## 8. Redis, the background worker and logs (Phase 4)
+
+Phase 4 added three production habits: a **cache** for the busiest page, a **background worker** so the timeout job runs by itself, and **structured logs** you can search. It also finished two items Phase 3 left open: **login rate limiting** and **logout**.
+
+### Q: What is Redis, and what does QuickServe keep in it?
+
+Redis is an in-memory key-value store: reads and writes take microseconds, keys can **expire on their own** (a TTL), and counters can be increased **atomically**. QuickServe uses it only for data that's fine to lose:
+
+| Key | What it holds | Expires after |
+|---|---|---|
+| `menu:v1:<restaurant id>` | The customer menu, ready to send | 10 seconds (`MENU_CACHE_TTL_SECONDS`) |
+| `login:fail:email:<email>` | Failed logins for one account | 15 minutes from the first failure |
+| `login:fail:ip:<ip>` | Failed logins from one IP address | 15 minutes from the first failure |
+| `auth:revoked:<token id>` | A token that was logged out | When that token would have expired anyway |
+
+PostgreSQL stays the **source of truth** for everything that matters: orders, stock and money never live only in Redis. You can look inside while the app runs with `docker compose exec redis redis-cli --scan`.
+
+### Q: How does the menu cache work?
+
+It's the **cache-aside** pattern:
+
+```mermaid
+flowchart LR
+    req["GET /restaurants/id/menu"] --> look{"Key in Redis?"}
+    look -->|"yes: HIT"| ret["Return the cached menu"]
+    look -->|"no: MISS"| build["Build it from PostgreSQL"]
+    build --> store["Store in Redis for 10 seconds"]
+    store --> ret
+    owner["Owner adds a dish, restocks or switches one off"] --> commit["Commit to PostgreSQL"]
+    commit --> del["Then delete the Redis key"]
+```
+
+Every menu response has an `X-Cache` header: `MISS` (built from the database), `HIT` (from Redis) or `BYPASS` (Redis unavailable). Try `curl -I http://127.0.0.1:8000/api/v1/restaurants/<id>/menu` twice.
+
+### Q: Why delete the cache entry *after* the database commit, not before?
+
+Because of the gap between the two. If we deleted first, another request could arrive before our commit, find the key missing, rebuild the menu from the **old** rows, and put that stale copy back in Redis for the whole TTL. Deleting after the commit means the next rebuild can only see the new data. It's the kind of ordering detail that interviewers like to ask about.
+
+### Q: Orders don't clear the cache. So the menu can say "2 left" when there are none?
+
+Yes, for at most 10 seconds, and that's a deliberate trade-off. A popular restaurant gets orders every few seconds; clearing the cache on each one would mean almost no cache hits. What makes it safe: **placing an order never trusts the menu**. It runs the atomic stock UPDATE in PostgreSQL, so a slightly stale "2 left" can never sell a third biryani. `test_a_stale_menu_can_never_cause_an_oversell` shows exactly that: stale menu, `HIT`, and the order is still refused.
+
+The general rule: **cache what's allowed to be a little old; check the source of truth for anything that must be right.**
+
+### Q: What happens when Redis goes down?
+
+Every feature degrades on purpose, and each choice is a trade-off:
+
+| Feature | With Redis down | Why this choice |
+|---|---|---|
+| Menu | Served straight from PostgreSQL (`X-Cache: BYPASS`) | Slower, but nobody notices a missing cache |
+| Login rate limit | Paused (**fails open**); a warning is logged | Refusing every login would turn a cache outage into "nobody can log in". A bank might choose the opposite |
+| Logout check | Paused (fails open); logged-out tokens work until they expire | Same availability argument; tokens expire in 30 minutes anyway |
+| Logging out | **Refused** with `503` | Silently "succeeding" would make users believe they're logged out when they aren't |
+| `/health/ready` | Still **ready**, with `"redis": "down (degraded...)"` | Pulling every instance out of the load balancer would make a small problem a total outage |
+
+A test caught a nasty surprise here: by default the Redis client **retries a failed command several times with growing pauses**, so with Redis down every menu request took about **4 seconds**. "Degraded" had quietly become "unusable". The client now retries once, immediately, and `test_menu_still_works_when_redis_is_down_and_stays_fast` fails if a request takes longer than a second.
+
+### Q: How does login rate limiting work?
+
+Two counters per failed login, both in Redis: one for the **account** (5 failures per 15 minutes) and one for the **IP address** (20 per 15 minutes). The IP limit stops one machine from trying one common password against thousands of accounts ("password spraying").
+
+- `INCR` is atomic, so two failures arriving at once can't both read "4" and both write "5".
+- `EXPIRE ... NX` starts the 15-minute window on the **first** failure only, and the key deletes itself afterwards. No cleanup job.
+- The check runs **before** the password check, so a locked-out attacker gets nothing, not even a wrong-password answer.
+- After the limit, even the **correct** password gets `429 Too Many Requests` with a `Retry-After` header (seconds until the window ends).
+- A successful login clears the account's counter.
+
+This is a **fixed window**: simple and cheap, but someone could make 5 attempts at minute 14 and 5 more at minute 16. A sliding window fixes that at the cost of more Redis work. Good to know for interviews.
+
+There's a FinOps angle too: a blocked attempt is answered in about **2 ms**, while a real password check takes about **110 ms** of Argon2 CPU time (both measured on the machine that built this). A guessing attack against a rate-limited login costs almost nothing to turn away.
+
+### Q: How can logout work if tokens can't be taken back?
+
+Each token now carries a unique id (`jti`). `POST /api/v1/auth/logout` stores that id in Redis under `auth:revoked:<jti>`, with a TTL equal to the token's remaining lifetime, and `get_current_user` rejects any token on that list. When the token would have expired anyway, the Redis key disappears too, so the deny list never holds more than 30 minutes of logouts. Logging out on one phone doesn't affect your other devices (`test_logout_kills_this_token_only`).
+
+Tokens issued before Phase 4 have no `jti`, so they're rejected: everyone simply logs in again once.
+
+### Q: Why is the timeout job a separate worker process instead of part of the API?
+
+Run it next to the API:
+
+```bash
+python -m app.worker           # runs the job every WORKER_INTERVAL_SECONDS (30)
+python -m app.worker --once    # one pass, then exit
+```
+
+- The API may run as several processes on several machines. A timer inside each would run the job many times over. A worker is deployed, scaled and restarted on its own.
+- A slow job never steals CPU from customers' requests.
+- **Running two workers is safe.** The job claims orders with `SELECT ... FOR UPDATE SKIP LOCKED`, so each worker takes different rows. `test_two_workers_never_process_the_same_order` runs two workers at once over 20 expired orders: exactly 20 rejections, never one order twice. A second worker is for resilience (one machine dies, the other keeps going), not speed.
+- If one pass fails (say the database is restarting), the worker logs the error and tries again next interval instead of crashing.
+
+### Q: What's graceful shutdown, and why does the worker care?
+
+When Docker stops a container, it sends `SIGTERM` and, if the process hasn't exited after a timeout (10 seconds by default for Linux containers), it's forcibly killed with `SIGKILL` [28]. Kubernetes does the same, with a default grace period of 30 seconds before `SIGKILL` [29]. A process killed mid-transaction leaves work half done.
+
+The worker catches `SIGTERM` (and Ctrl+C), finishes the pass it's in, and exits. While it's waiting between passes, it stops **immediately**, not after up to 30 seconds. Measured: worker started, `SIGTERM` sent while it was waiting, clean exit within a second. `test_stop_signal_ends_the_loop_without_waiting_out_the_interval` checks it.
+
+### Q: Why JSON logs, and what is a request ID?
+
+Every request now produces exactly one log line like this:
+
+```json
+{"time": "2026-11-17T09:45:50.973+00:00", "level": "INFO", "logger": "quickserve.http", "message": "request",
+ "request_id": "c776e4b1ba264ee5b74211062aa5e6c2", "method": "POST", "path": "/api/v1/auth/login",
+ "status": 429, "duration_ms": 2.3}
+```
+
+- **JSON**, because in production thousands of lines a second from many instances go into a log system (CloudWatch, Loki, ELK), and JSON lets it filter and count by field: "all 500s today", "logins blocked per hour". Set `LOG_JSON=false` for readable plain text while coding.
+- **A request ID** links every line that one request wrote (the access line, "login blocked", "order placed"…). It's returned in the `X-Request-ID` response header, so a user reporting a problem can quote it. If the caller sends a sensible `X-Request-ID`, it's reused, so one ID can follow a request across services; anything odd (spaces, quotes, too long) is replaced, so nobody can inject fake log lines.
+- **Unexpected errors** return `{"detail": "Internal server error", "request_id": "..."}`. The full stack trace goes into **our** logs and never to the client, because traces can reveal file paths, SQL and secrets (`test_unexpected_errors_return_a_request_id_not_a_stack_trace`).
+- **What's never logged:** passwords, emails on failed logins (people sometimes type their password into the email box), and query strings (they can contain personal data).
+- **Business events** are logged too: `order placed`, `order status changed`, `login failed`, `login blocked`, `timeout job finished`.
+
+FinOps: log platforms bill by the volume ingested and stored. One line per request plus real events (not every SQL statement) keeps that bill sane, and uvicorn's own access log is switched off because it would duplicate ours line for line.
+
+Two logging bugs turned up while building this, both worth remembering:
+
+1. **All our logs vanished in the tests.** The test setup runs the Alembic migrations, and Alembic's logging setup (`fileConfig`) switches off every logger that already exists by default. Fixed with `disable_existing_loggers=False` in `migrations/env.py`.
+2. **Request IDs went missing from some lines.** The ID was read when a line was *written out*, but lines can be written out later, elsewhere (a background log-shipping thread, or a test inspecting them afterwards). It's now stamped onto each log record the moment the record is created, inside the request.
+
+### Q: Why does Redis in Docker Compose have a memory limit and `volatile-ttl`?
+
+Redis keeps everything in RAM, and RAM is what you pay for, so `--maxmemory 64mb` caps it. When the cap is reached, the eviction policy decides what to drop. `volatile-ttl` evicts keys that have an expiry, **shortest remaining time first** [30]. That suits us: menu entries (seconds left) go before login counters and logged-out tokens (minutes left), so memory pressure throws away the cheapest data first. Snapshots to disk are switched off, because nothing in this Redis needs to survive a restart.
+
+### Q: How do I run all of it?
+
+`docker compose up -d` now starts PostgreSQL **and** Redis (on port **6380** on your machine, so it can't clash with any other project's Redis). Then use two terminals, both with the venv active:
+
+```bash
+# terminal 1: the API
+uvicorn app.main:app --reload
+
+# terminal 2: the worker
+python -m app.worker
+```
+
+`http://127.0.0.1:8000/health/ready` should show `"database": "ok", "redis": "ok"`.
+
+---
+
+## 9. DevOps already in the project
 
 ### Q: Why do the tests use a real PostgreSQL instead of SQLite?
 
 Because the features that make this app correct (row locks, `SKIP LOCKED`, partial unique indexes, `RETURNING`, CHECK constraints under concurrency, Read Committed re-checks) either don't exist in SQLite or behave differently there. A test that passes on SQLite would prove nothing about production. The test suite builds its database **by running the real Alembic migrations**, down and up, so every test run also tests the migrations.
 
-### Q: Why is only the database in Docker right now?
+### Q: Why are only the database and Redis in Docker right now?
 
-Docker Compose runs PostgreSQL 16, the same major version as CI and, later, AWS RDS. The app runs on your machine with `--reload` for fast edit-and-retry while learning. Phase 5 adds a Dockerfile and an `api` service. The Compose file already shows two production habits: a **healthcheck** (`pg_isready`), so dependants wait until the DB is truly ready, and **resource limits**, which on a laptop protect your machine and in the cloud are what you pay for.
+Docker Compose runs PostgreSQL 16 and Redis 7, the same major versions as CI and, later, AWS. The app runs on your machine with `--reload` for fast edit-and-retry while learning. Phase 5 adds a Dockerfile and an `api` service. The Compose file already shows two production habits: a **healthcheck** for each service (`pg_isready`, `redis-cli ping`), so dependants wait until they're truly ready, and **resource limits**, which on a laptop protect your machine and in the cloud are what you pay for.
 
 ### Q: What does the CI pipeline do, and why each step?
 
@@ -906,11 +1057,11 @@ Docker Compose runs PostgreSQL 16, the same major version as CI and, later, AWS 
 
 | Step | Why |
 |---|---|
-| PostgreSQL 16 **service container** | Tests run against the same database as production |
 | Install from `requirements-dev.lock` | Exact versions of every package, including dependencies of dependencies (next question) |
 | `ruff check` and `ruff format --check` | Style arguments end; obvious bugs (unused imports, shadowed names) caught before review |
 | `alembic upgrade head` + `alembic check` | **Fails if someone changed a model but forgot to create a migration**, a very common production incident |
-| `pytest` | All 59 tests, including the concurrency and login-attack tests |
+| PostgreSQL 16 and Redis 7 **service containers** | Tests run against the same database and cache as production |
+| `pytest` | All 81 tests, including the concurrency, login-attack and Redis-outage tests |
 | `concurrency: cancel-in-progress` | Two quick pushes cancel the older run instead of paying for both |
 | `timeout-minutes: 10` | A hung job can't burn CI minutes forever |
 
@@ -959,7 +1110,7 @@ These become Prometheus metrics and Grafana panels in Phase 7.
 
 ---
 
-## 9. FinOps: thinking in cost per order
+## 10. FinOps: thinking in cost per order
 
 ### Q: What is FinOps, in one paragraph?
 
@@ -1006,6 +1157,10 @@ Explaining the cycle data this way shows you understand FinOps as a way of think
 | Indexes matched to real queries (`status, accept_by` for the timeout job; `restaurant_id, status` for the restaurant's order queue) | Fewer full scans means a smaller database instance |
 | The report reads archived cycles, not millions of order rows | Cheap analytics; later it can run on a read replica or a nightly summary |
 | CI cancels superseded runs, has a timeout and caches pip | CI minutes are billed |
+| Menu cached in Redis for 10 seconds | The most-read page stops hitting PostgreSQL on every view, so a smaller database handles more customers |
+| Login rate limiting checked before the password | A blocked guess costs ~2 ms instead of ~110 ms of Argon2 CPU, so attacks are cheap to turn away |
+| Redis capped at 64 MB with `volatile-ttl` eviction | RAM is the expensive part of a cache; the cap makes the cost fixed and predictable |
+| One JSON log line per request, uvicorn's duplicate access log off | Log platforms bill by volume ingested and stored |
 | Container resource limits in Compose | The habit that becomes Kubernetes requests/limits, which decide node count and therefore cost |
 | Separate dev and runtime dependencies | Smaller production images: faster pulls, less registry storage |
 
@@ -1019,7 +1174,7 @@ Explaining the cycle data this way shows you understand FinOps as a way of think
 
 ---
 
-## 10. Bugs the tests caught while building this
+## 11. Bugs the tests caught while building this
 
 These are real, and they make better interview stories than any feature list.
 
@@ -1031,9 +1186,15 @@ These are real, and they make better interview stories than any feature list.
 
 **4. Dependency drift.** Two environments installed the same `requirements` file and got different `starlette` versions. **Fix:** a lock file for CI. The lesson: **"pinned" isn't "reproducible" until the transitive dependencies are pinned too.**
 
+**5. "Degraded" that was really "down".** With Redis switched off, the menu should still load from PostgreSQL, and it did, but every request took about 4 seconds, because the Redis client retries failed commands several times with growing pauses by default. **Fix:** one immediate retry, then fail fast; a test now fails if a Redis-down request takes over a second. The lesson: **test your failure modes for speed, not just correctness.**
+
+**6. The logs that vanished.** All application logs disappeared during the test run. Alembic's `fileConfig` switches off every existing logger by default, and the tests run migrations inside the same process. **Fix:** `disable_existing_loggers=False`. The lesson: **library defaults can silently undo your setup.**
+
+**7. Request IDs that went missing.** Log lines formatted after the request had finished lost their request ID, because it was read at formatting time. **Fix:** stamp it on each record when it's created. The lesson: **capture context when the event happens, not when you print it.**
+
 ---
 
-## 11. Project structure and API
+## 12. Project structure and API
 
 ```
 quickserve/
@@ -1043,17 +1204,21 @@ quickserve/
 │   ├── core/
 │   │   ├── config.py             all settings (DB, pool, timeouts, fees, tax rates)
 │   │   ├── security.py           password hashing (Argon2), JWT create/verify
+│   │   ├── redis.py              shared Redis client (short timeouts, fail fast)
+│   │   ├── logging.py            JSON logs, request IDs
 │   │   ├── exceptions.py         domain errors -> HTTP codes in one place
 │   │   └── money.py              Decimal rounding for bills
 │   ├── database/
 │   │   ├── base.py               declarative Base, naming convention, UUID + timestamp mixins
 │   │   ├── session.py            engine, pool, get_db(), transaction()
 │   │   └── models.py             imports every model (for Alembic)
+│   ├── worker.py                 background worker: runs the order timeout job
 │   └── modules/                  one folder per business area (modular monolith)
-│       ├── auth/                 login endpoint, get_current_user, require_roles
+│       ├── auth/                 login, logout, get_current_user, require_roles,
+│       │                         rate_limit (Redis), revocation (Redis)
 │       ├── users/                model (4 roles), schema, service, router
 │       ├── restaurants/
-│       ├── menu/                 model (MenuItem, InventoryCycle), repository, service,
+│       ├── menu/                 model (MenuItem, InventoryCycle), repository, service, cache,
 │       │                         analytics (ORM + raw SQL versions), schema, router
 │       ├── orders/               model, state_machine, pricing, repository, service, schema, router
 │       └── payments/             model, service, refunds (public interface), schema, router
@@ -1063,7 +1228,7 @@ quickserve/
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        59 tests, real PostgreSQL
+├── tests/                        81 tests, real PostgreSQL and Redis
 ├── .github/workflows/ci.yml
 ├── docker-compose.yml
 ├── requirements.txt / requirements-dev.txt / requirements-dev.lock
@@ -1077,12 +1242,13 @@ quickserve/
 
 | Method | Path | Who | Purpose |
 |---|---|---|---|
-| POST | `/auth/login` | anyone | Email + password in, access token out |
+| POST | `/auth/login` | anyone | Email + password in, access token out; `429` after too many failures |
+| POST | `/auth/logout` | logged in | Invalidate the token you're using |
 | POST | `/users` | anyone | Sign up as customer, restaurant owner or rider |
 | GET | `/users/me` | logged in | Who am I? |
 | GET | `/restaurants` | anyone | List restaurants (paginated) |
 | POST | `/restaurants` | restaurant owner | Create a restaurant you own |
-| GET | `/restaurants/{id}/menu` | anyone | Customer menu with `orderable`, badge, units left |
+| GET | `/restaurants/{id}/menu` | anyone | Customer menu with `orderable`, badge, units left; cached (`X-Cache` header) |
 | POST | `/restaurants/{id}/menu` | owner | Add a dish (opens stock cycle 1) |
 | GET | `/restaurants/{id}/menu/manage` | owner | Raw stock/consumed counters |
 | POST | `/menu/{id}/restock` | owner | Close and archive the cycle, open a new one |
@@ -1101,22 +1267,22 @@ quickserve/
 
 ---
 
-## 12. Roadmap
+## 13. Roadmap
 
 Each phase ends with something you can show: a passing CI run, a live URL, a dashboard screenshot.
 
 | Phase | What we build | Concepts |
 |---|---|---|
 | **3. Auth** (done) | Login, JWT access tokens, four roles, ownership checks, rider role migration | Authentication vs authorization, hashing vs encryption, token expiry, object-level authorization |
-| **4. Redis, jobs, logging** (next) | Cache the customer menu (invalidated on order/restock), schedule the timeout job every minute, login rate limiting and token revocation in Redis, structured JSON logs with request IDs | Cache invalidation, at-least-once jobs, rate limiting, log cost |
-| **5. Docker and CI/CD** | Multi-stage Dockerfile, non-root user, Compose with `api` + `db` + `redis`, CI builds and pushes the image | Image layers and size, container networking |
+| **4. Redis, jobs, logging** (done) | Redis menu cache invalidated on owner changes, worker running the timeout job every 30 seconds, login rate limiting and logout in Redis, JSON logs with request IDs | Cache invalidation, at-least-once jobs, rate limiting, log cost |
+| **5. Docker and CI/CD** (in progress) | Multi-stage Dockerfile, non-root user, Compose with `api` + `db` + `redis`, CI builds and pushes the image | Image layers and size, container networking |
 | **6. AWS and Terraform** | VPC, EC2 or ECS, RDS PostgreSQL, Secrets Manager, Nginx, everything in Terraform with remote state | IAM least privilege, public vs private subnets, `plan`/`apply`/`destroy` |
 | **7. Kubernetes and monitoring** | Minikube first: Deployments, Services, Ingress, ConfigMaps, Secrets, HPA, probes wired to `/health` and `/health/ready`; Prometheus + Grafana with the business signals above | Requests vs limits, rolling updates, what happens when a pod dies |
 | **8. FinOps and services** | Cost per order measured on EC2 vs Kubernetes, OpenCost, rightsizing; split out the notification service driven by `order_status_events` | Unit economics, event-driven design, the outbox pattern |
 
 ---
 
-## 13. Interview cheat sheet
+## 14. Interview cheat sheet
 
 **How do you prevent overselling?** A single conditional UPDATE (`consumed = consumed + q WHERE consumed + q <= stock RETURNING ...`). The check and the write happen together under the row lock; the second racer re-checks the WHERE clause against the committed row and gets nothing. A CHECK constraint guards against impossible values, but it can't prevent lost updates. Our race demo showed 40 orders accepted for 10 units with the naive version.
 
@@ -1150,11 +1316,23 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 
 **Why the same error for a wrong password and an unknown email?** To stop account enumeration. The timing must match too, so an unknown email still runs one full password-hash check.
 
+**What's cache-aside, and when do you invalidate?** Read from the cache, and on a miss build from the database and store it with a TTL. Invalidate **after** the database commit, or a reader can re-cache the old data in the gap.
+
+**What can you cache safely?** Anything allowed to be a little old. Our menu's stock badges can be 10 seconds stale because the order itself checks stock in PostgreSQL.
+
+**Fail open or fail closed?** When a dependency is down, either skip the check (keep working, less protection) or refuse the request (stay protected, stop working). We fail open for rate limits and token checks, but refuse logout, because a fake success there would mislead the user.
+
+**How does a fixed-window rate limiter work?** An atomic `INCR` per key, with an expiry set on the first hit. It's cheap; the weakness is bursts at the window edges, which a sliding window fixes.
+
+**What's graceful shutdown?** Handle `SIGTERM`, finish the current unit of work, then exit before the orchestrator sends `SIGKILL`.
+
+**Why request IDs?** One ID ties together every log line from one request across modules and services, and users can quote it when reporting a problem.
+
 **What's unit economics in FinOps?** Cost per unit of business value. For us: infrastructure cost per completed order, tracked as orders grow.
 
 ---
 
-## 14. References
+## 15. References
 
 Business and tax figures change often; the dates show when each was reported.
 
@@ -1185,3 +1363,6 @@ Business and tax figures change often; the dates show when each was reported.
 25. OWASP, *Authentication Cheat Sheet*. https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
 26. OWASP API Security Top 10 2023, *API1:2023 Broken Object Level Authorization*. https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/
 27. OWASP, *Password Storage Cheat Sheet*. https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+28. Docker documentation, *docker container stop* (SIGTERM, then SIGKILL after the timeout; 10 seconds by default for Linux containers). https://docs.docker.com/engine/reference/commandline/stop/
+29. Google Cloud blog, *Kubernetes best practices: terminating with grace* (default termination grace period of 30 seconds). https://cloud.google.com/blog/products/containers-kubernetes/kubernetes-best-practices-terminating-with-grace
+30. Redis documentation, *Key eviction* (eviction policies, including volatile-ttl). https://redis.io/docs/latest/develop/reference/eviction/

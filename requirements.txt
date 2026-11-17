@@ -12,3 +12,4 @@ email-validator==2.4.0
 pwdlib[argon2]==0.4.2
 PyJWT==2.15.1             # login tokens
 python-multipart==0.0.34  # lets FastAPI read the login form (OAuth2 password flow)
+redis==8.1.0              # cache, rate limits, logout deny list

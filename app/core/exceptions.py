@@ -27,6 +27,22 @@ class Forbidden(DomainError):
     status_code = 403
 
 
+class TooManyRequests(DomainError):
+    """429: slow down. retry_after tells the client how many seconds to wait."""
+
+    status_code = 429
+
+    def __init__(self, message: str, retry_after: int):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class ServiceUnavailable(DomainError):
+    """503: a dependency we need for this specific action is down."""
+
+    status_code = 503
+
+
 class NotFound(DomainError):
     status_code = 404
 

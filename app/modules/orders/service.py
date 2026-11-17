@@ -1,5 +1,6 @@
 """Order placement and lifecycle."""
 
+import logging
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.exceptions import Conflict, Forbidden, InvalidTransition, NotFound, OutOfStock
+from app.core.logging import log_event
 from app.core.money import rupees
 from app.database.session import transaction
 from app.modules.menu import repository as menu_repo
@@ -29,6 +31,8 @@ from app.modules.payments.refunds import refund_for_order
 from app.modules.restaurants.model import Restaurant
 from app.modules.restaurants.service import owns_restaurant
 from app.modules.users.model import Role, User
+
+log = logging.getLogger("quickserve.orders")
 
 # Riders see orders only once they're ready for pickup.
 RIDER_VISIBLE = {OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY, OrderStatus.DELIVERED}
@@ -98,6 +102,9 @@ def place_order(db: Session, data: OrderCreate, customer: User, settings: Settin
         db.add(order)
         db.flush()
         db.add(OrderStatusEvent(order_id=order.id, from_status=None, to_status=OrderStatus.PLACED, actor="customer"))
+    log_event(
+        log, logging.INFO, "order placed", order_id=order.id, restaurant_id=order.restaurant_id, total=order.grand_total
+    )
     return order
 
 
@@ -162,6 +169,9 @@ def _apply(db: Session, order: Order, target: OrderStatus, actor: str, note: str
 
     order.status = target
     db.add(OrderStatusEvent(order_id=order.id, from_status=current, to_status=target, actor=actor, note=note))
+    log_event(
+        log, logging.INFO, "order status changed", order_id=order.id, frm=current.value, to=target.value, actor=actor
+    )
 
 
 def _release_stock(db: Session, order: Order) -> None:
