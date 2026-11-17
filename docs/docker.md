@@ -208,8 +208,8 @@ You pay for an image every time it is stored or moved:
 | **CI minutes** | Building and pushing a big image takes longer, and CI time is billed per minute. |
 | **Security work** | More packages means more vulnerability alerts to look into. That costs engineer time. |
 
-This image takes **about 379 MB on disk** once unpacked, and the compressed
-download is **about 81 MB**. Roughly 130 MB of the unpacked size is our
+This image takes **about 387 MB on disk** once unpacked, and the compressed
+download is **about 82 MB**. Roughly 130 MB of the unpacked size is our
 Python libraries, and our own code is only about 0.3 MB. The rest is the
 Python base image. Run `docker images quickserve-api` to see the current
 numbers.
@@ -228,21 +228,23 @@ docker images quickserve-api        # shows the image size
 
 `-t quickserve-api:dev` names (tags) the image; `.` means "use this folder".
 
-### How do I run it against my local database?
+### How do I run it against my local database and Redis?
 
-The database container from `docker-compose.yml` listens on port 5434 of your
-Mac. Inside a container, `localhost` means *the container itself*, so we use
-`host.docker.internal`, Docker Desktop's name for "the Mac running Docker".
+The containers from `docker-compose.yml` listen on your Mac: the database on
+port 5434 and Redis on port 6380. Inside a container, `localhost` means *the
+container itself*, so we use `host.docker.internal`, Docker Desktop's name for
+"the Mac running Docker".
 
 ```bash
-docker compose up -d                # make sure the database is running
+docker compose up -d                # make sure the database and Redis are running
 
 docker run --rm -d --name quickserve-api-test -p 8001:8000 \
   -e DATABASE_URL=postgresql+psycopg://postgres:postgres@host.docker.internal:5434/quickserve \
+  -e REDIS_URL=redis://host.docker.internal:6380/0 \
   quickserve-api:dev
 
 curl http://127.0.0.1:8001/health/ready
-# {"status":"ready","database":"ok"}
+# {"status":"ready","database":"ok","redis":"ok"}
 
 docker stop quickserve-api-test
 ```
@@ -253,6 +255,37 @@ docker stop quickserve-api-test
   8001 so it doesn't clash with your `uvicorn --reload` dev server on 8000.
 - `-e DATABASE_URL=...`: settings come from environment variables, the same
   as `.env` on your laptop. The image itself contains no settings or secrets.
+- `-e REDIS_URL=...`: where Redis is (menu cache, login rate limits, logout).
+
+### How do I run the background worker with the same image?
+
+The worker (`python -m app.worker`) runs the order timeout job every 30
+seconds. It uses the **same image** as the API. Only the command at the end
+changes, and that replaces the Dockerfile's `CMD`:
+
+```bash
+docker run --rm -d --name quickserve-worker-test \
+  -e DATABASE_URL=postgresql+psycopg://postgres:postgres@host.docker.internal:5434/quickserve \
+  -e REDIS_URL=redis://host.docker.internal:6380/0 \
+  quickserve-api:dev python -m app.worker
+
+docker logs -f quickserve-worker-test   # {"message": "worker started", ...}
+docker stop quickserve-worker-test      # "worker stopped cleanly" in under a second
+```
+
+**Why one image for two jobs?** You build, scan and store a single image, and
+the API and worker can never end up running different versions of the code.
+
+**Why no `-p` for the worker?** Nobody connects to the worker. It only makes
+outgoing connections to the database and Redis.
+
+**What does `docker stop` do to it?** Docker sends `SIGTERM`. The worker
+catches it, finishes the pass it's in the middle of, and exits. If it hasn't
+exited after 10 seconds, Docker kills it with `SIGKILL`. Because the Dockerfile
+uses the exec form, Python is process 1 and receives that signal directly.
+
+To run a single pass and exit (handy for testing):
+`docker run --rm -e DATABASE_URL=... -e REDIS_URL=... quickserve-api:dev python -m app.worker --once`
 
 ### How do I see logs, health, and which user it runs as?
 
@@ -286,4 +319,5 @@ manager, never in the Dockerfile or in Git:
 -e ENVIRONMENT=production
 -e JWT_SECRET_KEY=<long random secret>
 -e DATABASE_URL=<real database URL>
+-e REDIS_URL=<real Redis URL>
 ```
