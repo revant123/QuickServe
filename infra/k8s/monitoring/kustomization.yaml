@@ -1,0 +1,37 @@
+# Monitoring for QuickServe: Prometheus (collects numbers, runs alert rules)
+# and Grafana (dashboards). Included by both overlays.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: quickserve
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: quickserve
+    includeSelectors: false
+
+resources:
+  - prometheus.yaml
+  - grafana.yaml
+
+# Config files become ConfigMaps. The hash Kustomize adds to each name means
+# that editing rules.yml or the dashboard restarts the pod that uses it.
+configMapGenerator:
+  - name: prometheus-config
+    files:
+      - prometheus.yml
+      - rules.yml
+  - name: grafana-datasources
+    files:
+      - grafana/datasource.yaml
+  - name: grafana-dashboard-providers
+    files:
+      - grafana/dashboards.yaml
+  - name: grafana-dashboards
+    files:
+      - grafana/quickserve-overview.json
+
+secretGenerator:
+  - name: grafana-admin
+    literals:
+      - password=quickserve-admin # local only, like the database password

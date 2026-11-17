@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import Conflict, NotFound
+from app.core.metrics import PAYMENTS, after_commit
 from app.database.session import transaction
 from app.modules.menu.repository import db_now
 from app.modules.orders import service as orders
@@ -79,6 +80,7 @@ def pay(
             )
             db.add(payment)
             db.flush()  # a duplicate key or a second SUCCESS fails here, before we touch the order
+            after_commit(db, lambda: PAYMENTS.labels("success" if ok else "failed").inc())
             if ok:
                 orders.mark_paid(db, order, now, settings)
             # A failed attempt leaves the order PLACED: the customer may retry

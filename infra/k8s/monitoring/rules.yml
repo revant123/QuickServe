@@ -1,0 +1,122 @@
+# Prometheus rules for QuickServe.
+#
+# Recording rules pre-compute the questions we ask most (so dashboards are
+# cheap to load). Alerting rules turn a bad number into a notification.
+# Both are unit-tested with `promtool test rules rules_test.yml` (in CI).
+groups:
+  - name: quickserve-recording
+    rules:
+      # ----- Customers: RED (Rate, Errors, Duration) -----
+      - record: quickserve:http_requests:rate5m
+        expr: sum(rate(quickserve_http_requests_total[5m]))
+
+      # "or vector(0)": with no 5xx at all the top line would be empty, and the
+      # dashboard would say "No data" instead of 0%.
+      - record: quickserve:http_errors:ratio5m
+        expr: |
+          (sum(rate(quickserve_http_requests_total{status=~"5.."}[5m])) or vector(0))
+            /
+          clamp_min(sum(rate(quickserve_http_requests_total[5m])), 1e-9)
+
+      - record: quickserve:http_latency_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(quickserve_http_request_duration_seconds_bucket[5m])))
+
+      # ----- Business -----
+      - record: quickserve:orders_placed:per_hour
+        expr: sum(increase(quickserve_orders_placed_total[1h]))
+
+      - record: quickserve:order_value_rupees:avg_1h
+        expr: |
+          sum(increase(quickserve_order_value_rupees_sum[1h]))
+            /
+          clamp_min(sum(increase(quickserve_order_value_rupees_count[1h])), 1e-9)
+
+      - record: quickserve:payments:success_ratio_1h
+        expr: |
+          sum(increase(quickserve_payments_total{outcome="success"}[1h]))
+            /
+          clamp_min(sum(increase(quickserve_payments_total[1h])), 1e-9)
+
+      - record: quickserve:menu_cache:hit_ratio_5m
+        expr: |
+          sum(rate(quickserve_menu_cache_requests_total{result="hit"}[5m]))
+            /
+          clamp_min(sum(rate(quickserve_menu_cache_requests_total[5m])), 1e-9)
+
+      # ----- FinOps: the unit metric -----
+      # What the infrastructure costs per hour, in US dollars. 0.04 is the
+      # Phase 6 AWS estimate (t4g.small + db.t4g.micro + public IPv4 + disks).
+      # Change it when the setup changes; on a real cluster, take it from a cost
+      # tool such as OpenCost instead of a constant.
+      - record: quickserve:infra_cost_usd:per_hour
+        expr: vector(0.04)
+
+      # Cost per order = what the hour cost / orders in that hour.
+      # Falls as orders grow on the same machines: that is the FinOps goal.
+      - record: quickserve:cost_per_order_usd:1h
+        expr: |
+          quickserve:infra_cost_usd:per_hour
+            /
+          clamp_min(quickserve:orders_placed:per_hour, 1)
+
+  - name: quickserve-alerts
+    rules:
+      - alert: QuickServeAPIDown
+        expr: sum(up{app="api"}) == 0 or absent(up{app="api"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: No API pod is answering Prometheus
+          runbook: "kubectl -n quickserve get pods; kubectl -n quickserve describe deploy/api"
+
+      - alert: QuickServeHighErrorRate
+        expr: quickserve:http_errors:ratio5m > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 5% of requests fail with a 5xx ({{ $value | humanizePercentage }})"
+          runbook: "kubectl -n quickserve logs deploy/api | grep '\"level\": \"ERROR\"'"
+
+      - alert: QuickServeSlowResponses
+        expr: quickserve:http_latency_seconds:p95_5m > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The slowest 5% of requests take over 500 ms ({{ $value | humanizeDuration }})"
+
+      # The liveness probe restarts a STUCK worker. This catches a worker that
+      # runs but keeps failing (database down, a bad migration), where a
+      # restart wouldn't help and a person has to look.
+      - alert: QuickServeWorkerFailing
+        expr: time() - max(quickserve_worker_last_success_timestamp_seconds) > 300
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The order timeout job hasn't succeeded for {{ $value | humanizeDuration }}"
+          runbook: "kubectl -n quickserve logs deploy/worker --tail=50"
+
+      # A business alert: customers try to pay and most attempts fail.
+      # Only with enough attempts, so two failures at 3 a.m. don't page anyone.
+      - alert: QuickServePaymentsFailing
+        expr: |
+          quickserve:payments:success_ratio_1h < 0.8
+            and
+          sum(increase(quickserve_payments_total[1h])) >= 20
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Only {{ $value | humanizePercentage }} of payments succeed"
+
+      # Someone is guessing passwords hard enough to hit the rate limit often.
+      - alert: QuickServeLoginAttack
+        expr: sum(rate(quickserve_logins_total{outcome="blocked"}[5m])) * 60 > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | printf \"%.0f\" }} blocked logins per minute"
