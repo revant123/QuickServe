@@ -1,0 +1,71 @@
+#!/bin/bash
+# Runs once, as root, the first time the server boots.
+# Terraform filled in the image name, region and secret path before boot.
+# (In the template, bash's own variables are written with two dollar signs so
+# Terraform leaves them alone.)
+set -euo pipefail
+exec > >(tee -a /var/log/quickserve-bootstrap.log) 2>&1
+
+dnf install -y docker
+systemctl enable --now docker
+
+mkdir -p /opt/quickserve
+
+# deploy.sh does every deploy, the first one below and all later ones:
+#   sudo /opt/quickserve/deploy.sh sha-<commit>
+cat > /opt/quickserve/deploy.sh <<'DEPLOY'
+#!/bin/bash
+set -euo pipefail
+
+TAG="$${1:?usage: deploy.sh <image-tag>, e.g. deploy.sh sha-3073e30}"
+IMAGE="${image}:$TAG"
+REGION="${region}"
+PREFIX="${ssm_prefix}"
+ENV_FILE=/opt/quickserve/app.env
+
+# Secrets come from Parameter Store at deploy time. They are never in the
+# image, never in Git, and never in this script.
+param() {
+  aws ssm get-parameter --region "$REGION" --name "$PREFIX/$1" \
+    --with-decryption --query Parameter.Value --output text
+}
+
+umask 077   # the env file is readable by root only
+{
+  echo "ENVIRONMENT=${app_environment}"
+  echo "DATABASE_URL=$(param database_url)"
+  echo "JWT_SECRET_KEY=$(param jwt_secret_key)"
+  echo "REDIS_URL=redis://quickserve-redis:6379/0"
+  echo "LOG_JSON=true"
+} > "$ENV_FILE"
+
+docker network inspect quickserve >/dev/null 2>&1 || docker network create quickserve
+docker pull "$IMAGE"
+
+# Redis is started once and kept across deploys. Same limits as Docker Compose.
+if ! docker ps -a --format '{{.Names}}' | grep -qx quickserve-redis; then
+  docker run -d --name quickserve-redis --network quickserve --restart unless-stopped \
+    --memory 128m redis:7-alpine \
+    redis-server --maxmemory 64mb --maxmemory-policy volatile-ttl --save ""
+fi
+
+# 1. Migrations, once per deploy, before the new code starts.
+#    If this fails, set -e stops the script and the old version keeps running.
+docker run --rm --network quickserve --env-file "$ENV_FILE" "$IMAGE" alembic upgrade head
+
+# 2. Swap the API and the worker to the new image. `docker stop` sends
+#    SIGTERM and waits up to 20 s, so the worker finishes its current pass
+#    (`docker rm -f` would SIGKILL it straight away).
+docker stop -t 20 quickserve-api quickserve-worker >/dev/null 2>&1 || true
+docker rm quickserve-api quickserve-worker >/dev/null 2>&1 || true
+docker run -d --name quickserve-api --network quickserve --env-file "$ENV_FILE" \
+  --restart unless-stopped --memory 768m -p 80:8000 "$IMAGE"
+docker run -d --name quickserve-worker --network quickserve --env-file "$ENV_FILE" \
+  --restart unless-stopped --memory 256m --no-healthcheck "$IMAGE" python -m app.worker
+
+docker image prune -f >/dev/null   # FinOps: old images fill the disk
+echo "deployed $IMAGE"
+DEPLOY
+chmod 700 /opt/quickserve/deploy.sh
+
+/opt/quickserve/deploy.sh "${image_tag}"

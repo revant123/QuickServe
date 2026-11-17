@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (Git ignores it) and edit.
+
+# An immutable tag from https://github.com/revant123/QuickServe/pkgs/container/quickserve
+image_tag = "sha-3073e30"
+
+# Keep the demo to yourself: your public IP (search "what is my ip") with /32.
+# allowed_http_cidrs = ["203.0.113.7/32"]

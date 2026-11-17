@@ -27,6 +27,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
 7. [Login, tokens and permissions](#7-login-tokens-and-permissions)
 8. [Redis, the background worker and logs (Phase 4)](#8-redis-the-background-worker-and-logs-phase-4)
    - [Docker: the app in containers (Phase 5)](#docker-the-app-in-containers-phase-5)
+   - [AWS and Terraform (Phase 6)](#aws-and-terraform-phase-6)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -228,6 +229,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| AWS infrastructure as code (Phase 6) | [AWS and Terraform Q&A](#aws-and-terraform-phase-6); `infra/` with [infra/README.md](infra/README.md); 18 `terraform test` checks; the `terraform` job in CI |
 | Image published to a registry (Phase 5b) | [Registry Q&A](#q-where-does-the-image-go-after-ci-builds-it); the `publish` job in `.github/workflows/ci.yml`; `ghcr.io/revant123/quickserve` |
 | Dockerfile and the whole stack in Docker (Phase 5) | [Docker Q&A](#docker-the-app-in-containers-phase-5); `Dockerfile`, `.dockerignore`, `docker-compose.yml` (profile `app`), `requirements.lock`, [docs/docker.md](docs/docker.md), the `docker` job in CI |
 | Redis cache, rate limiting, logout, worker, JSON logs (Phase 4) | [Section 8](#8-redis-the-background-worker-and-logs-phase-4); `app/core/redis.py`, `app/core/logging.py`, `app/worker.py`, `app/modules/menu/cache.py` |
@@ -245,7 +247,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Background jobs | A separate worker (`python -m app.worker`) expires unpaid orders and auto-rejects orders the restaurant didn't accept, every 30 seconds; safe to run several (`FOR UPDATE SKIP LOCKED`); graceful shutdown | |
 | Caching and logs | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses | Metrics and dashboards (Phase 7) |
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
-| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, liveness/readiness checks, pinned and locked dependencies | AWS, Terraform, Kubernetes |
+| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), liveness/readiness checks, pinned and locked dependencies | Applying the Terraform to a real AWS account, Kubernetes |
 
 Everything except browsing restaurants and menus needs a login. Orders belong to the logged-in customer, and who may change an order's status is decided by the login token, never by the request body. See [section 7](#7-login-tokens-and-permissions).
 
@@ -476,7 +478,7 @@ flowchart LR
 
 ### 3.7 CI pipeline (runs on every push and pull request)
 
-`test` and `docker` run side by side, so adding the Docker job didn't make CI slower. `publish` waits for both.
+`test`, `docker` and `terraform` run side by side, so new jobs don't make CI slower. `publish` waits for `test` and `docker`.
 
 ```mermaid
 flowchart LR
@@ -504,6 +506,13 @@ flowchart LR
     subgraph publish["job: publish (needs test and docker)"]
         pub{"push to main?"} -->|"yes"| push["build amd64 + arm64, push to ghcr.io as sha-xxxxxxx and main"]
         pub -->|"pull request"| only["build amd64 only, don't push"]
+    end
+
+    push2["git push or pull request"] --> tf
+
+    subgraph terraform["job: terraform (no AWS account needed)"]
+        tf["terraform fmt -check"] --> val["init -backend=false and validate, every stack and module"]
+        val --> tftest["terraform test: 18 checks with mock AWS"]
     end
 ```
 
@@ -1207,6 +1216,110 @@ docker run --rm -p 8002:8000 \
 
 This is exactly what a server does: download a tested image and give it settings through environment variables. Nothing is built on the server.
 
+### AWS and Terraform (Phase 6)
+
+The Terraform code that builds QuickServe on AWS is in [`infra/`](infra/), with step-by-step deploy and teardown instructions in [infra/README.md](infra/README.md). These are the questions behind it.
+
+```mermaid
+flowchart LR
+    you["Browser"] -->|"HTTP :80"| app
+
+    subgraph aws["AWS, ap-south-1 (Mumbai), built by Terraform"]
+        subgraph vpc["VPC 10.20.0.0/16"]
+            subgraph pub["Public subnet"]
+                app["EC2 t4g.small: Docker running api, worker, redis"]
+            end
+            subgraph priv["Private subnets (2 zones), no internet route"]
+                rds[("RDS PostgreSQL 16, db.t4g.micro")]
+            end
+        end
+        ssm["Parameter Store: database_url, jwt_secret_key"]
+        budget["Budget alert: email at 50%, 80%, forecast 100%"]
+        s3[("S3: Terraform state, versioned, encrypted")]
+    end
+
+    ghcr["ghcr.io image (arm64)"] -->|"docker pull"| app
+    app -->|"5432, TLS, only from the app's security group"| rds
+    app -.->|"reads secrets at deploy"| ssm
+    laptop["Your Mac: terraform apply"] -.-> s3
+    laptop -.->|"Session Manager, no SSH"| app
+```
+
+### Q: Is anything running on AWS right now?
+
+No. This phase is the code only, and it has never been applied. CI checks it on every pull request with fake ("mock") AWS, which needs no account and costs nothing. Deploying is a separate, deliberate step that starts with a budget alert ([infra/README.md](infra/README.md)).
+
+### Q: Why Terraform instead of clicking through the AWS console?
+
+Clicking can't be reviewed, repeated or undone reliably. With Terraform, the whole environment is text in Git: a pull request shows exactly what will change, `terraform plan` previews it before anything happens, and `terraform destroy` removes every piece it made, so nothing is forgotten and left billing. Building the same thing twice gives the same result, which is what lets a team run identical dev, staging and production environments.
+
+### Q: What is Terraform "state", and why keep it in S3?
+
+State is Terraform's memory: a file mapping each resource in the code to the real thing in AWS (this `aws_db_instance` is database `quickserve-dev-db`). Without it Terraform can't tell what to change or delete. Kept on one laptop, it's lost with the laptop and nobody else can work on the infrastructure. So it lives in an S3 bucket with **versioning** (every change keeps the previous copy), **encryption** and **all public access blocked**. Locking stops two people applying at once; Terraform's S3 backend now does this with a lock file in the bucket (`use_lockfile = true`), and the older DynamoDB lock table is deprecated [42].
+
+One honest catch: the state contains the database password and the JWT secret in plain text, because Terraform generated them. That's why the bucket is private, encrypted and accessed only over HTTPS. Newer Terraform can keep some secrets out of state with "write-only" arguments; that's a later improvement.
+
+### Q: Why is there a separate `bootstrap` stack?
+
+Two things must exist before anything else. The **budget alert** comes first, so the very first mistake emails you. The **state bucket** can't store the state of the run that creates it, so bootstrap keeps its own tiny state on your laptop. You run it once per AWS account and keep it; `prevent_destroy` stops an accidental `destroy` from deleting the bucket. Budgets that only send alerts are free [48].
+
+### Q: Why is the database in a private subnet, and why is there no NAT gateway?
+
+A **private subnet** has no route to the internet in either direction, so the database can't be reached from outside even if a password leaks. On top of that, its **security group** accepts port 5432 only from the app server's security group: not from the internet, not from your laptop. The app connects with `sslmode=require`, so the traffic is encrypted even inside the VPC.
+
+A **NAT gateway** would let private machines reach the internet. It bills for every hour it exists plus every GB through it (AWS's own example uses USD 0.045 per hour and per GB [37]), and it's the classic surprise on a learner's bill. Nothing here needs it: the database never calls out, and the app server sits in a public subnet behind a security group that only opens port 80.
+
+### Q: How do I get a shell on the server without SSH?
+
+**Session Manager**, part of AWS Systems Manager. The server has no SSH key and port 22 is closed. `aws ssm start-session` opens a shell through AWS, checked against your login, and every session can be logged. Session Manager has no extra charge [38]. There's no key file to lose or leak, and one fewer port for attackers to scan.
+
+### Q: Where do the secrets live, and how does the app get them?
+
+In **Parameter Store** as `SecureString` (encrypted) parameters under `/quickserve/dev/`. When `deploy.sh` runs, it reads them with the server's own permissions and writes a root-only env file for the containers. The secrets are never in the image, never in Git and never in the boot script (a test checks that). The server's permission policy allows reading `/quickserve/dev/*` and nothing else.
+
+Why Parameter Store and not Secrets Manager? Standard parameters cost nothing [38]; Secrets Manager charges USD 0.40 per secret per month [39] and adds automatic rotation, which a two-secret dev environment doesn't need yet. The app runs with `ENVIRONMENT=dev`, so the check from Phase 3 applies: it refuses to start with the built-in development JWT secret.
+
+### Q: If someone breaks into a container, can they steal the server's AWS access?
+
+That's the classic cloud attack: from inside a compromised app, ask the instance metadata service (IMDS) at 169.254.169.254 for the server's temporary AWS keys. Two settings block it. **IMDSv2 required** means a token must be fetched first with a PUT request, which simple request-forgery bugs can't send. **Hop limit 1** means that token's reply dies after one network hop; a Docker container is one hop further away than the server itself, so only the host (and its deploy script) can get credentials [41].
+
+### Q: Why one EC2 server with Docker, and not ECS, Kubernetes or a load balancer?
+
+Cost and learning order. This setup runs the **same image and the same steps** as Docker Compose (migrate, then API and worker), so the only new things are AWS's network, database and permissions. A load balancer, ECS or EKS each add an always-on hourly charge before serving a single order. Phase 7 brings Kubernetes, health probes and zero-downtime rolling deploys on Minikube, for free on your Mac, and only then on a cloud cluster.
+
+### Q: Why ARM (t4g), and what is "standard" CPU credit mode?
+
+The `g` in `t4g` means Graviton (ARM), cheaper per hour than the comparable Intel types, which is why CI builds an ARM image (Phase 5b). The `t` means *burstable*: the server earns CPU credits while idle and spends them in bursts. AWS launches T4g in **unlimited** mode by default, where running hot for long bills extra "surplus credits" [40]. We set **standard** mode: the server slows down instead of charging more. For a demo, a slow minute is better than a surprise bill.
+
+### Q: How do you test Terraform code without an AWS account?
+
+With `terraform test` and **mock providers**. A mock provider stands in for AWS and invents fake IDs instead of calling it [43], so the checks run in CI for free. 18 tests check the rules that matter:
+
+- the database isn't public and only the app's security group can reach it;
+- secrets are encrypted and never baked into the boot script;
+- the server requires IMDSv2 with hop limit 1, uses standard credits and only opens port 80;
+- private subnets have no internet route, and the default security group allows nothing;
+- the budget has three alerts;
+- bad input is rejected: an Intel instance type (the image is ARM), a malformed IP range, one availability zone, or no alert email.
+
+`terraform fmt` and `terraform validate` run first, and the provider lock files (`.terraform.lock.hcl`, Terraform's version of `requirements.lock`) pin the AWS provider version for every OS.
+
+### Q: What will it cost to run?
+
+| Piece | Mumbai on-demand price | If left on for a month |
+|---|---|---|
+| EC2 `t4g.small` | about USD 0.011 per hour [47] | ~USD 8 |
+| RDS `db.t4g.micro`, single-AZ | about USD 0.021 per hour [46] | ~USD 15 |
+| Public IPv4 address | USD 0.005 per hour [44] | ~USD 3.65 |
+| Disks (16 GB + 20 GB gp3) | | a few dollars |
+| Parameter Store, Session Manager, budget alerts | free [38] [48] | 0 |
+
+That's roughly **USD 30 a month if forgotten**, or about **USD 0.15 for a 3-hour session** followed by `terraform destroy`. Prices change, so check the AWS Pricing Calculator before applying. The FinOps lesson: the cheapest resource is the one that doesn't exist while you're not using it.
+
+### Q: How do I log in to AWS from the terminal without access keys?
+
+`aws login` (AWS CLI 2.32 or newer) reuses your console sign-in and gives the CLI short-lived credentials that rotate automatically, so there's no long-lived access key saved on your Mac to leak [45]. The exact commands are in [infra/README.md](infra/README.md).
+
 ---
 
 ## 9. DevOps already in the project
@@ -1337,6 +1450,14 @@ Explaining the cycle data this way shows you understand FinOps as a way of think
 | CI writes the image size to every run's summary | A size jump is seen in review, not on the bill |
 | Image built for ARM as well as Intel | Keeps cheaper AWS Graviton servers an option [36] |
 | Two-chip build only on `main`, layer cache shared between runs | The slow emulated ARM build doesn't run on every pull request; fewer CI minutes |
+| Budget alert created before any other AWS resource | The first mistake costs an email, not a bill |
+| No NAT gateway; database in private subnets | Avoids an always-on hourly charge plus per-GB processing [37] |
+| Parameter Store instead of Secrets Manager | USD 0 instead of USD 0.40 per secret per month [38] [39] |
+| `t4g` Graviton with `standard` CPU credits | Cheaper per hour, and no surplus-credit charges [40] |
+| Single-AZ `db.t4g.micro`, storage autoscaling off, no final snapshot in dev | Smallest PostgreSQL; the bill can't grow by itself; nothing left billing after `destroy` |
+| `default_tags` on every AWS resource (`project`, `environment`) | Cost Explorer can split the bill by project and environment |
+| Old state versions expire after 90 days | Versioning without paying to keep every version forever |
+| `terraform destroy` after every session | ~USD 0.15 per session instead of ~USD 30 per month |
 | Limits on every container in Compose (API 1 CPU / 512 MB, worker 0.5 CPU / 256 MB) | First guesses for the Kubernetes requests and limits that decide node count in Phase 7 |
 
 ### Q: How do I avoid a surprise AWS bill?
@@ -1404,8 +1525,12 @@ quickserve/
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
 ├── tests/                        81 tests, real PostgreSQL and Redis
+├── infra/                        Terraform for AWS (Phase 6); start with infra/README.md
+│   ├── bootstrap/                budget alert + S3 state bucket, once per account
+│   ├── envs/dev/                 network, database, secrets, app server (+ tests/)
+│   └── modules/                  budget, network, database, app_server (each with tests/)
 ├── docs/docker.md                the Dockerfile explained line by line
-├── .github/workflows/ci.yml      three jobs: test, docker (build + smoke test), publish (ghcr.io)
+├── .github/workflows/ci.yml      four jobs: test, docker (build + smoke test), publish (ghcr.io), terraform
 ├── Dockerfile                    two-stage image, runs as user "app"
 ├── .dockerignore                 keeps venv/, .git/, tests and .env out of the image
 ├── docker-compose.yml            db + redis; profile "app" adds migrate, api, worker
@@ -1456,7 +1581,7 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **4. Redis, jobs, logging** (done) | Redis menu cache invalidated on owner changes, worker running the timeout job every 30 seconds, login rate limiting and logout in Redis, JSON logs with request IDs | Cache invalidation, at-least-once jobs, rate limiting, log cost |
 | **5. Docker and CI/CD** (done) | Multi-stage Dockerfile, non-root user, runtime lock file, Compose with `db` + `redis` + `migrate` + `api` + `worker`, CI builds the image and smoke-tests the running stack | Image layers and size, container networking, migrations as a one-off job, graceful shutdown |
 | **5b. Image registry** (done) | CI publishes the image to GitHub Container Registry after both other jobs pass, tagged with the commit ID, for Intel and ARM | Immutable tags, least-privilege CI tokens, multi-architecture images |
-| **6. AWS and Terraform** | VPC, EC2 or ECS, RDS PostgreSQL, Secrets Manager, Nginx, everything in Terraform with remote state | IAM least privilege, public vs private subnets, `plan`/`apply`/`destroy` |
+| **6. AWS and Terraform** (code done and tested; applying it is your call) | Budget alert and S3 state bucket (bootstrap), VPC with public/private subnets and no NAT, RDS PostgreSQL 16, Parameter Store secrets, one Graviton EC2 server running the ghcr.io image, Session Manager instead of SSH, 18 mock-based `terraform test` checks in CI | IAM least privilege, public vs private subnets, remote state and locking, IMDSv2, `plan`/`apply`/`destroy` |
 | **7. Kubernetes and monitoring** | Minikube first: Deployments, Services, Ingress, ConfigMaps, Secrets, HPA, probes wired to `/health` and `/health/ready`; Prometheus + Grafana with the business signals above | Requests vs limits, rolling updates, what happens when a pod dies |
 | **8. FinOps and services** | Cost per order measured on EC2 vs Kubernetes, OpenCost, rightsizing; split out the notification service driven by `order_status_events` | Unit economics, event-driven design, the outbox pattern |
 
@@ -1552,3 +1677,15 @@ Business and tax figures change often; the dates show when each was reported.
 34. Docker documentation, *Using profiles with Compose*. https://docs.docker.com/compose/how-tos/profiles/
 35. GitHub Docs, *GitHub Packages billing* (free for public packages). https://docs.github.com/en/billing/managing-billing-for-github-packages
 36. AWS, *AWS Graviton Fast Start* (Graviton on Fargate: up to 40% better performance at 20% lower cost than comparable x86). https://aws.amazon.com/ec2/graviton/fast-start
+37. AWS, *Amazon VPC pricing* (NAT gateway: hourly charge plus per-GB data processing; the example uses USD 0.045 for each). https://aws.amazon.com/vpc/pricing/
+38. AWS, *AWS Systems Manager pricing* (standard Parameter Store parameters and Session Manager at no additional charge). https://aws.amazon.com/systems-manager/pricing/
+39. AWS, *AWS Secrets Manager pricing* (USD 0.40 per secret per month plus API calls). https://aws.amazon.com/secrets-manager/pricing/
+40. AWS documentation, *Unlimited mode for burstable performance instances* (T4g, T3a and T3 launch as unlimited by default; surplus credits can be charged). https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/burstable-performance-instances-unlimited-mode.html
+41. AWS, *Amazon EKS now supports EC2 Instance Metadata Service v2* (IMDSv2 token via PUT; response hop limit of 1 by default). https://aws.amazon.com/about-aws/whats-new/2020/08/amazon-eks-supports-ec2-instance-metadata-service-v2
+42. HashiCorp, *Terraform S3 backend* (`use_lockfile` for S3-native locking; DynamoDB locking deprecated). https://developer.hashicorp.com/terraform/language/backend/s3
+43. HashiCorp, *Terraform test mocking* (mock providers generate fake data instead of calling provider APIs). https://developer.hashicorp.com/terraform/language/tests/mocking
+44. AWS News Blog, *New: AWS Public IPv4 Address Charge* (USD 0.005 per IP per hour from 1 February 2024). https://aws.amazon.com/blogs/aws/new-aws-public-ipv4-address-charge-public-ip-insights/
+45. AWS Security Blog, *Simplified developer access to AWS with `aws login`* (temporary, auto-rotated CLI credentials from your console sign-in; AWS CLI 2.32.0+). https://aws.amazon.com/blogs/security/simplified-developer-access-to-aws-with-aws-login
+46. Spare Cores, *db.t4g.micro* (PostgreSQL, Mumbai single-zone: about USD 0.021 per hour). https://sparecores.com/database/aws/db.t4g.micro
+47. DevZero, *t4g.small* (on-demand from about USD 0.0112 per hour in ap-south-1). https://www.devzero.io/instances/aws/t4g.small
+48. AWS, *AWS Budgets pricing* (budgets without actions are free; first two action-enabled budgets free). https://aws.amazon.com/aws-cost-management/aws-budgets/pricing

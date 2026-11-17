@@ -204,3 +204,40 @@ jobs:
             echo '```'
             echo "Pull it: \`docker pull ${IMAGE}:sha-${GITHUB_SHA::7}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Phase 6: check the Terraform code. No AWS account or credentials needed:
+  # `terraform test` uses mock providers that invent fake IDs instead of
+  # calling AWS. Nothing is created and nothing is billed.
+  terraform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.17.2"   # same version as the README asks you to install
+          terraform_wrapper: false
+
+      - name: Format
+        run: terraform fmt -check -recursive -diff infra
+
+      - name: Validate and test every stack and module
+        run: |
+          set -euo pipefail
+          for dir in infra/bootstrap infra/envs/dev infra/modules/*/; do
+            echo "::group::$dir"
+            # -backend=false: don't touch the S3 state bucket; CI has no AWS access.
+            terraform -chdir="$dir" init -backend=false -input=false -no-color
+            terraform -chdir="$dir" validate -no-color
+            terraform -chdir="$dir" test -no-color
+            echo "::endgroup::"
+          done
+
+      - name: Lock files cover Linux, Mac and Windows
+        # A lock file made on one OS only would make `terraform init` fail on the others.
+        run: |
+          for f in infra/bootstrap/.terraform.lock.hcl infra/envs/dev/.terraform.lock.hcl; do
+            test "$(git status --porcelain "$f")" = "" || { echo "::error::$f changed during init: run terraform providers lock"; exit 1; }
+          done
