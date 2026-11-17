@@ -1,18 +1,20 @@
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import NotFound
+from app.core.exceptions import Forbidden, NotFound
 from app.database.session import transaction
 from app.modules.restaurants.model import Restaurant
 from app.modules.restaurants.schema import RestaurantCreate
-from app.modules.users.model import User
+from app.modules.users.model import Role, User
 
 
-def create_restaurant(db: Session, data: RestaurantCreate) -> Restaurant:
+def create_restaurant(db: Session, data: RestaurantCreate, owner: User) -> Restaurant:
+    if owner.role not in (Role.RESTAURANT_OWNER, Role.ADMIN):
+        raise Forbidden("Only restaurant owners can create restaurants")
     with transaction(db):
-        if db.get(User, data.owner_id) is None:
-            raise NotFound("Owner not found")
-        restaurant = Restaurant(**data.model_dump())
+        restaurant = Restaurant(owner_id=owner.id, **data.model_dump())
         db.add(restaurant)
     return restaurant
 
@@ -22,3 +24,26 @@ def list_restaurants(db: Session, limit: int, offset: int) -> list[Restaurant]:
     # SELECT is a slow query today and an outage once the table is large.
     stmt = select(Restaurant).where(Restaurant.is_open.is_(True)).order_by(Restaurant.name).limit(limit).offset(offset)
     return list(db.execute(stmt).scalars())
+
+
+def ensure_can_manage(db: Session, restaurant_id: uuid.UUID, user: User) -> Restaurant:
+    """Public interface for other modules: may this user manage this restaurant?
+
+    Being a RESTAURANT_OWNER isn't enough. You must own THIS restaurant.
+    Checking the role but forgetting the ownership is one of the most common
+    API security bugs: owner A edits owner B's menu just by changing an ID in
+    the URL. OWASP lists it as the top API risk (Broken Object Level Authorization).
+    """
+    restaurant = db.get(Restaurant, restaurant_id)
+    if restaurant is None:
+        raise NotFound("Restaurant not found")
+    if user.role is Role.ADMIN:
+        return restaurant
+    if user.role is not Role.RESTAURANT_OWNER or restaurant.owner_id != user.id:
+        raise Forbidden("You can only manage your own restaurant")
+    return restaurant
+
+
+def owns_restaurant(db: Session, restaurant_id: uuid.UUID, user: User) -> bool:
+    restaurant = db.get(Restaurant, restaurant_id)
+    return restaurant is not None and user.role is Role.RESTAURANT_OWNER and restaurant.owner_id == user.id

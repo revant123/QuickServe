@@ -2,16 +2,19 @@
 
 import math
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFound
 from app.database.session import transaction
+from app.modules.menu import analytics
 from app.modules.menu import repository as repo
 from app.modules.menu.model import InventoryCycle, MenuItem
 from app.modules.menu.schema import AvailabilityUpdate, MenuItemCreate, MenuItemPublic, RestockSuggestion
 from app.modules.restaurants.model import Restaurant
+from app.modules.restaurants.service import ensure_can_manage
+from app.modules.users.model import User
 
 LOW_STOCK_THRESHOLD = 5  # show "Only N left" at or below this
 SELLING_FAST_MINUTES = 60  # show "Selling fast" if it will sell out within this
@@ -19,10 +22,17 @@ MIN_SALES_FOR_VELOCITY = 3  # don't call something "fast" after one sale
 MAX_DEMAND_EXTRAPOLATION = 2.0  # cap for the sold-out correction in restock suggestions
 
 
-def create_menu_item(db: Session, restaurant_id: uuid.UUID, data: MenuItemCreate) -> MenuItem:
+def _item_you_manage(db: Session, menu_item_id: uuid.UUID, user: User) -> MenuItem:
+    item = db.get(MenuItem, menu_item_id)
+    if item is None:
+        raise NotFound("Menu item not found")
+    ensure_can_manage(db, item.restaurant_id, user)
+    return item
+
+
+def create_menu_item(db: Session, restaurant_id: uuid.UUID, data: MenuItemCreate, user: User) -> MenuItem:
     with transaction(db):
-        if db.get(Restaurant, restaurant_id) is None:
-            raise NotFound("Restaurant not found")
+        ensure_can_manage(db, restaurant_id, user)
         now = repo.db_now(db)
         item = MenuItem(restaurant_id=restaurant_id, cycle_started_at=now, consumed=0, cycle_no=1, **data.model_dump())
         db.add(item)
@@ -32,7 +42,7 @@ def create_menu_item(db: Session, restaurant_id: uuid.UUID, data: MenuItemCreate
 
 
 def restock(
-    db: Session, menu_item_id: uuid.UUID, quantity: int, carry_over_leftover: bool
+    db: Session, menu_item_id: uuid.UUID, quantity: int, carry_over_leftover: bool, user: User
 ) -> tuple[InventoryCycle, MenuItem]:
     """Close the current cycle, archive its numbers, start a new one with consumed = 0.
 
@@ -43,6 +53,7 @@ def restock(
         item = repo.lock_item(db, menu_item_id)
         if item is None:
             raise NotFound("Menu item not found")
+        ensure_can_manage(db, item.restaurant_id, user)
         cycle = repo.get_open_cycle(db, menu_item_id)
         now = repo.db_now(db)
 
@@ -80,11 +91,9 @@ def restock(
     return cycle, item
 
 
-def set_availability(db: Session, menu_item_id: uuid.UUID, data: AvailabilityUpdate) -> MenuItem:
+def set_availability(db: Session, menu_item_id: uuid.UUID, data: AvailabilityUpdate, user: User) -> MenuItem:
     with transaction(db):
-        item = db.get(MenuItem, menu_item_id)
-        if item is None:
-            raise NotFound("Menu item not found")
+        item = _item_you_manage(db, menu_item_id, user)
         item.is_available = data.is_available
         # Switching on clears any timer. Switching off with a time means "back at that time".
         item.unavailable_until = None if data.is_available else data.unavailable_until
@@ -136,7 +145,7 @@ def customer_menu(db: Session, restaurant_id: uuid.UUID) -> list[MenuItemPublic]
     return out
 
 
-def restock_suggestion(db: Session, menu_item_id: uuid.UUID, lookback: int = 3) -> RestockSuggestion:
+def restock_suggestion(db: Session, menu_item_id: uuid.UUID, user: User, lookback: int = 3) -> RestockSuggestion:
     """Suggest how many units to prepare next, from the last few closed cycles.
 
     The key idea is censored demand. If an item sold out, sales only tell us
@@ -146,9 +155,7 @@ def restock_suggestion(db: Session, menu_item_id: uuid.UUID, lookback: int = 3) 
     very early sell-out doesn't produce an absurd number).
     This is a teaching heuristic, not a production forecaster.
     """
-    item = db.get(MenuItem, menu_item_id)
-    if item is None:
-        raise NotFound("Menu item not found")
+    item = _item_you_manage(db, menu_item_id, user)
     cycles = repo.recent_closed_cycles(db, menu_item_id, lookback)
     if not item.track_stock or not cycles:
         return RestockSuggestion(
@@ -177,3 +184,20 @@ def restock_suggestion(db: Session, menu_item_id: uuid.UUID, lookback: int = 3) 
     return RestockSuggestion(
         menu_item_id=menu_item_id, suggested_quantity=suggested, based_on_cycles=len(cycles), explanation=notes
     )
+
+
+def owner_menu(db: Session, restaurant_id: uuid.UUID, user: User) -> list[MenuItem]:
+    ensure_can_manage(db, restaurant_id, user)
+    return repo.list_menu(db, restaurant_id)
+
+
+def cycle_history(db: Session, menu_item_id: uuid.UUID, user: User) -> list[InventoryCycle]:
+    _item_you_manage(db, menu_item_id, user)
+    return repo.list_cycles(db, menu_item_id)
+
+
+def best_sellers(db: Session, restaurant_id: uuid.UUID, days: int, user: User) -> list[dict]:
+    # Sales data is business-sensitive: only the owner (or an admin) sees it.
+    ensure_can_manage(db, restaurant_id, user)
+    since = repo.db_now(db) - timedelta(days=days)
+    return analytics.best_sellers_orm(db, restaurant_id, since)

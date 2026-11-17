@@ -30,12 +30,12 @@ def _run_concurrently(n: int, fn):
 
 def test_forty_customers_ten_biryanis(db, restaurant, customer, make_item):
     item = make_item("Hyderabadi Biryani", "280.00", stock=10)
-    payload = order_payload(customer, restaurant, (item, 1))
+    payload = order_payload(restaurant, (item, 1))
 
     def try_order(_):
         session = SessionLocal()
         try:
-            place_order(session, payload)
+            place_order(session, payload, customer)
             return "ok"
         except OutOfStock:
             return "sold out"
@@ -50,18 +50,18 @@ def test_forty_customers_ten_biryanis(db, restaurant, customer, make_item):
     assert item.consumed == 10 and item.available == 0
 
 
-def test_restock_in_the_middle_of_a_rush_loses_nothing(db, restaurant, customer, make_item):
+def test_restock_in_the_middle_of_a_rush_loses_nothing(db, restaurant, customer, make_item, owner):
     """Orders and a restock race. Every sold unit must be counted in exactly one cycle."""
     item = make_item("Masala Chai", "30.00", stock=500)
-    payload = order_payload(customer, restaurant, (item, 1))
+    payload = order_payload(restaurant, (item, 1))
 
     def act(i):
         session = SessionLocal()
         try:
             if i == 15:
-                restock(session, item.id, quantity=500, carry_over_leftover=False)
+                restock(session, item.id, quantity=500, carry_over_leftover=False, user=owner)
                 return "restock"
-            place_order(session, payload)
+            place_order(session, payload, customer)
             return "ok"
         finally:
             session.close()

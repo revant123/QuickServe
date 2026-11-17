@@ -14,7 +14,7 @@ from tests.helpers import order_payload
 
 def _sell(db, customer, restaurant, item, units, per_order):
     for _ in range(units // per_order):
-        place_order(db, order_payload(customer, restaurant, (item, per_order)))
+        place_order(db, order_payload(restaurant, (item, per_order)), customer)
 
 
 def _set_cycle_times(db, item, cycle_no, *, started_h_ago, sold_out_h_ago=None, closed_h_ago=0.0):
@@ -35,15 +35,15 @@ def _set_cycle_times(db, item, cycle_no, *, started_h_ago, sold_out_h_ago=None, 
 
 
 @pytest.fixture
-def samosa_and_biryani(db, restaurant, customer, make_item):
+def samosa_and_biryani(db, restaurant, customer, make_item, owner):
     """Samosa: 200 made, 120 sold over 10 hours, never sold out.
     Biryani: 20 made, all 20 gone within the first hour."""
     samosa = make_item("Samosa", "20.00", stock=200)
     biryani = make_item("Chicken Biryani", "260.00", stock=20)
     _sell(db, customer, restaurant, samosa, 120, 10)
     _sell(db, customer, restaurant, biryani, 20, 5)
-    restock(db, samosa.id, 200, False)
-    restock(db, biryani.id, 20, False)
+    restock(db, samosa.id, 200, False, user=owner)
+    restock(db, biryani.id, 20, False, user=owner)
     _set_cycle_times(db, samosa, 1, started_h_ago=10)
     _set_cycle_times(db, biryani, 1, started_h_ago=10, sold_out_h_ago=9)
     return samosa, biryani
@@ -79,15 +79,15 @@ def test_returns_and_waste_are_not_counted_as_sales(db, restaurant, customer, ma
     assert row["units_sold"] == 4
 
 
-def test_restock_suggestion_corrects_for_sold_out_cycles(db, restaurant, customer, make_item):
+def test_restock_suggestion_corrects_for_sold_out_cycles(db, restaurant, customer, make_item, owner):
     item = make_item("Chole Bhature", "180.00", stock=20)
     _sell(db, customer, restaurant, item, 20, 5)  # cycle 1: sold out
-    restock(db, item.id, 30, False)
+    restock(db, item.id, 30, False, user=owner)
     _set_cycle_times(db, item, 1, started_h_ago=16, sold_out_h_ago=12, closed_h_ago=8)  # sold out halfway
     _sell(db, customer, restaurant, item, 25, 5)  # cycle 2: 25 of 30, no sell-out
-    restock(db, item.id, 30, False)
+    restock(db, item.id, 30, False, user=owner)
 
-    s = restock_suggestion(db, item.id)
+    s = restock_suggestion(db, item.id, owner)
 
     # cycle 1: 20 sold in 4 of 8 hours -> demand ~40 ; cycle 2: 25 ; average 32.5 -> 33
     assert s.suggested_quantity == 33

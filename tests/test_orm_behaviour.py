@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database.session import engine
 from app.modules.restaurants.model import Restaurant
+from app.modules.users.model import Role
 
 
 @contextmanager
@@ -30,13 +31,13 @@ def count_queries():
 
 
 @pytest.fixture
-def three_restaurants(db, make_user, make_item, restaurant):
+def three_restaurants(db, make_user, make_item, restaurant, admin):
     from decimal import Decimal
 
     from app.modules.menu.schema import MenuItemCreate
     from app.modules.menu.service import create_menu_item
 
-    owner = make_user()
+    owner = make_user(Role.RESTAURANT_OWNER)
     others = [
         Restaurant(owner_id=owner.id, name=f"R{i}", address="Chandigarh", packaging_charge=Decimal("0"))
         for i in range(2)
@@ -45,7 +46,7 @@ def three_restaurants(db, make_user, make_item, restaurant):
     db.commit()
     for r in [restaurant, *others]:
         for n in range(3):
-            create_menu_item(db, r.id, MenuItemCreate(name=f"Dish {n}", price=Decimal("100"), stock=5))
+            create_menu_item(db, r.id, MenuItemCreate(name=f"Dish {n}", price=Decimal("100"), stock=5), admin)
     db.expunge_all()
 
 

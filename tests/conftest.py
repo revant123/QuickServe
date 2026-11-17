@@ -29,6 +29,7 @@ from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
+from app.core.security import hash_password  # noqa: E402
 from app.database.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.modules.menu.schema import MenuItemCreate  # noqa: E402
@@ -36,6 +37,10 @@ from app.modules.menu.service import create_menu_item  # noqa: E402
 from app.modules.restaurants.model import Restaurant  # noqa: E402
 from app.modules.users.model import Role, User  # noqa: E402
 
+TEST_PASSWORD = "test-password-123"
+# Argon2 is slow ON PURPOSE (that is what makes stolen hashes hard to crack), so hash
+# the shared test password once instead of once per test user.
+TEST_PASSWORD_HASH = hash_password(TEST_PASSWORD)
 TABLES = "payments, order_status_events, order_items, orders, inventory_cycles, menu_items, restaurants, users"
 
 # Safety guard: these tests TRUNCATE every table. Refuse to run against anything
@@ -81,7 +86,12 @@ def make_user(db):
 
     def _make(role: Role = Role.CUSTOMER) -> User:
         counter["n"] += 1
-        user = User(name=f"User {counter['n']}", email=f"user{counter['n']}@example.com", password_hash="x", role=role)
+        user = User(
+            name=f"User {counter['n']}",
+            email=f"user{counter['n']}@example.com",
+            password_hash=TEST_PASSWORD_HASH,
+            role=role,
+        )
         db.add(user)
         db.commit()
         return user
@@ -90,8 +100,27 @@ def make_user(db):
 
 
 @pytest.fixture
-def restaurant(db, make_user) -> Restaurant:
-    owner = make_user(Role.RESTAURANT_OWNER)
+def owner(make_user) -> User:
+    return make_user(Role.RESTAURANT_OWNER)
+
+
+@pytest.fixture
+def customer(make_user) -> User:
+    return make_user(Role.CUSTOMER)
+
+
+@pytest.fixture
+def rider(make_user) -> User:
+    return make_user(Role.RIDER)
+
+
+@pytest.fixture
+def admin(make_user) -> User:
+    return make_user(Role.ADMIN)
+
+
+@pytest.fixture
+def restaurant(db, owner) -> Restaurant:
     r = Restaurant(
         owner_id=owner.id, name="Sharma Dhaba", address="Sector 17, Chandigarh", packaging_charge=Decimal("20.00")
     )
@@ -101,12 +130,7 @@ def restaurant(db, make_user) -> Restaurant:
 
 
 @pytest.fixture
-def customer(make_user) -> User:
-    return make_user(Role.CUSTOMER)
-
-
-@pytest.fixture
-def make_item(db, restaurant):
+def make_item(db, restaurant, owner):
     def _make(name="Paneer Tikka", price="150.00", stock: int | None = 10, track_stock=True):
         return create_menu_item(
             db,
@@ -114,6 +138,7 @@ def make_item(db, restaurant):
             MenuItemCreate(
                 name=name, price=Decimal(price), stock=stock if track_stock else None, track_stock=track_stock
             ),
+            owner,
         )
 
     return _make

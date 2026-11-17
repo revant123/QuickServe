@@ -13,7 +13,10 @@ without a redeploy is cheaper to operate.
 from decimal import Decimal
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEV_JWT_SECRET = "dev-only-insecure-secret-change-me-before-deploying"
 
 
 class Settings(BaseSettings):
@@ -28,6 +31,14 @@ class Settings(BaseSettings):
 
     # Print every SQL statement SQLAlchemy sends. Turn this on while learning.
     sql_echo: bool = False
+
+    # --- Login tokens (JWT) ---
+    # Anyone who knows this secret can create valid tokens for ANY user, so in a
+    # real deployment it comes from a secrets manager, never from Git.
+    # Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"
+    jwt_secret_key: str = DEV_JWT_SECRET
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
 
     # Connection pool. See README: "What is connection pooling and why does it cost money?"
     db_pool_size: int = 5
@@ -46,6 +57,16 @@ class Settings(BaseSettings):
     free_delivery_above: Decimal = Decimal("299.00")
     gst_rate_food: Decimal = Decimal("0.05")  # restaurant service via an e-commerce operator
     gst_rate_fees: Decimal = Decimal("0.18")  # platform's own fees (platform + delivery)
+
+    @model_validator(mode="after")
+    def refuse_dev_secret_outside_local(self):
+        # Fail at startup, loudly, instead of running in production with a
+        # secret that is published on GitHub.
+        if self.environment not in ("local", "test", "ci") and self.jwt_secret_key == DEV_JWT_SECRET:
+            raise ValueError("JWT_SECRET_KEY must be set to a real secret outside local development")
+        if len(self.jwt_secret_key) < 32:
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters")
+        return self
 
 
 @lru_cache

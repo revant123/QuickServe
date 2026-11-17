@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.core.exceptions import Conflict, InvalidTransition, NotFound, OutOfStock
+from app.core.exceptions import Conflict, Forbidden, InvalidTransition, NotFound, OutOfStock
 from app.core.money import rupees
 from app.database.session import transaction
 from app.modules.menu import repository as menu_repo
@@ -27,10 +27,14 @@ from app.modules.orders.state_machine import (
 )
 from app.modules.payments.refunds import refund_for_order
 from app.modules.restaurants.model import Restaurant
-from app.modules.users.model import User
+from app.modules.restaurants.service import owns_restaurant
+from app.modules.users.model import Role, User
+
+# Riders see orders only once they're ready for pickup.
+RIDER_VISIBLE = {OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY, OrderStatus.DELIVERED}
 
 
-def place_order(db: Session, data: OrderCreate, settings: Settings | None = None) -> Order:
+def place_order(db: Session, data: OrderCreate, customer: User, settings: Settings | None = None) -> Order:
     """Reserve stock for every line and create the order, all or nothing.
 
     If the third item is out of stock, the first two reservations are undone by
@@ -50,8 +54,8 @@ def place_order(db: Session, data: OrderCreate, settings: Settings | None = None
             raise NotFound("Restaurant not found")
         if not restaurant.is_open:
             raise Conflict("Restaurant is not accepting orders right now")
-        if db.get(User, data.customer_id) is None:
-            raise NotFound("Customer not found")
+        if customer.role is not Role.CUSTOMER:
+            raise Forbidden("Only customer accounts can place orders")
 
         reserved = []
         # Always lock rows in the same order (sorted ids). If order A locks
@@ -67,7 +71,7 @@ def place_order(db: Session, data: OrderCreate, settings: Settings | None = None
         bill = compute_bill(sum(row.price * qty for row, qty in reserved), restaurant.packaging_charge, settings)
         now = menu_repo.db_now(db)
         order = Order(
-            customer_id=data.customer_id,
+            customer_id=customer.id,
             restaurant_id=restaurant.id,
             delivery_address=data.delivery_address,
             status=OrderStatus.PLACED,
@@ -106,11 +110,35 @@ def _why_unavailable(db: Session, item_id: uuid.UUID, restaurant_id: uuid.UUID, 
     return OutOfStock(f"Only {item.available} left of {item.name}, you asked for {qty}")
 
 
-def get_order(db: Session, order_id: uuid.UUID) -> Order:
+def _actor_for(db: Session, order: Order, user: User) -> str:
+    """Which part does this user play for THIS order?
+
+    Raises NotFound (not Forbidden) when the user has no business seeing the
+    order. Answering "403 Forbidden" would confirm that an order with that id
+    exists; "404" reveals nothing.
+    """
+    if user.role is Role.ADMIN:
+        return "support"
+    if user.role is Role.CUSTOMER and order.customer_id == user.id:
+        return "customer"
+    if user.role is Role.RESTAURANT_OWNER and owns_restaurant(db, order.restaurant_id, user):
+        return "restaurant"
+    if user.role is Role.RIDER and order.status in RIDER_VISIBLE:
+        return "rider"
+    raise NotFound("Order not found")
+
+
+def get_order(db: Session, order_id: uuid.UUID, user: User) -> Order:
     order = db.get(Order, order_id)
     if order is None:
         raise NotFound("Order not found")
+    _actor_for(db, order, user)
     return order
+
+
+def timeline(db: Session, order_id: uuid.UUID, user: User) -> list[OrderStatusEvent]:
+    get_order(db, order_id, user)
+    return repo.list_events(db, order_id)
 
 
 def _apply(db: Session, order: Order, target: OrderStatus, actor: str, note: str | None = None) -> None:
@@ -166,15 +194,18 @@ def lock_order(db: Session, order_id: uuid.UUID) -> Order:
     return order
 
 
-def change_status(db: Session, order_id: uuid.UUID, target: OrderStatus, actor: str, note: str | None = None) -> Order:
+def change_status(db: Session, order_id: uuid.UUID, target: OrderStatus, user: User, note: str | None = None) -> Order:
     with transaction(db):
         order = lock_order(db, order_id)
+        actor = _actor_for(db, order, user)  # decided by the token, never by the request body
+        if actor not in ACTORS.get(target, set()):
+            raise Forbidden(f"As {actor} you can't move an order to {target.value}")
         _apply(db, order, target, actor, note)
     return order
 
 
-def cancel(db: Session, order_id: uuid.UUID, actor: str, reason: str) -> Order:
-    return change_status(db, order_id, OrderStatus.CANCELLED, actor, reason)
+def cancel(db: Session, order_id: uuid.UUID, user: User, reason: str) -> Order:
+    return change_status(db, order_id, OrderStatus.CANCELLED, user, reason)
 
 
 def run_timeouts(db: Session, batch: int = 100) -> TimeoutReport:

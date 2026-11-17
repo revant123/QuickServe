@@ -15,6 +15,18 @@ class DomainError(Exception):
         self.message = message
 
 
+class Unauthorized(DomainError):
+    """401: we don't know who you are (no token, bad token, expired token, wrong password)."""
+
+    status_code = 401
+
+
+class Forbidden(DomainError):
+    """403: we know who you are, and you're not allowed to do this."""
+
+    status_code = 403
+
+
 class NotFound(DomainError):
     status_code = 404
 
