@@ -52,14 +52,21 @@ Create a virtual environment in one known folder, and put it first on `PATH`
 so `pip` and `python` mean the ones inside it. Having all libraries in one
 folder is what lets the next stage copy them in a single step.
 
-### `COPY requirements.txt .` then `RUN pip install -r requirements.txt`
+### `COPY requirements.lock .` then `RUN pip install -r requirements.lock`
 
 Install our runtime libraries (FastAPI, SQLAlchemy, psycopg and so on). Only
-`requirements.txt` is installed, not `requirements-dev.txt`: pytest and other
-test tools have no place in production.
+runtime packages are installed, not pytest, ruff or other test tools: they
+have no place in production.
 
-Why copy `requirements.txt` *on its own, before the code*? Docker caches every
-step. If `requirements.txt` has not changed, Docker reuses the installed
+Why the `.lock` file and not `requirements.txt`? `requirements.txt` pins the
+libraries we chose, but not *their* dependencies. Build the same commit next
+month and pip could pick a newer sub-dependency that the tests never saw.
+`requirements.lock` pins all 37 packages, so every build of a commit gets the
+packages that commit was tested with. CI checks that its versions match
+`requirements-dev.lock`, which is what the tests ran on.
+
+Why copy the lock file *on its own, before the code*? Docker caches every
+step. If `requirements.lock` has not changed, Docker reuses the installed
 libraries from last time and skips the slow install, even when you changed
 the app code. Copying the code first would break that cache on every edit.
 
@@ -321,3 +328,20 @@ manager, never in the Dockerfile or in Git:
 -e DATABASE_URL=<real database URL>
 -e REDIS_URL=<real Redis URL>
 ```
+
+## Running it all with Docker Compose
+
+The `docker run` commands above are the manual way, good for seeing what each
+flag does. Day to day, `docker-compose.yml` does the same with one command.
+Its `app` profile builds this image and runs it three ways (migration job,
+API, worker) next to the database and Redis:
+
+```bash
+docker compose --profile app up -d --build
+docker compose --profile app exec api python -m scripts.seed
+open http://127.0.0.1:8001/docs
+docker compose --profile app down
+```
+
+Inside Compose's network the containers use `db:5432` and `redis:6379`
+instead of `host.docker.internal`. The README's Docker Q&A explains why.

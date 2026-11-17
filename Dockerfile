@@ -14,11 +14,13 @@ ENV PIP_NO_CACHE_DIR=1 \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy only requirements.txt first. Docker caches each step, so as long as this
+# Copy only the lock file first. Docker caches each step, so as long as this
 # file is unchanged, the slow install below is reused on the next build even
 # when the app code changes.
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+# requirements.lock (not requirements.txt) pins every sub-dependency too, so
+# building the same commit next month gives the same packages the tests passed with.
+COPY requirements.lock .
+RUN pip install -r requirements.lock
 
 
 # ---------- Stage 2: runtime ----------

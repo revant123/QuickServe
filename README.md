@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, GitHub Actions. **81 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, GitHub Actions. **81 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
 
 ---
 
@@ -26,6 +26,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
 6. [Business rules borrowed from Zomato and Swiggy](#6-business-rules-borrowed-from-zomato-and-swiggy)
 7. [Login, tokens and permissions](#7-login-tokens-and-permissions)
 8. [Redis, the background worker and logs (Phase 4)](#8-redis-the-background-worker-and-logs-phase-4)
+   - [Docker: the app in containers (Phase 5)](#docker-the-app-in-containers-phase-5)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -37,6 +38,11 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
 ---
 
 ## 1. Run it (step by step)
+
+There are two ways to run QuickServe:
+
+- **Steps 1 to 9 (developer mode):** PostgreSQL and Redis run in Docker, the API runs on your machine with `--reload`, so code edits apply instantly. Use this while changing code.
+- **[Shortcut: everything in Docker](#shortcut-everything-in-docker-no-python-setup)** (below step 9): one command builds the image and starts the database, Redis, migrations, API and worker. No Python setup needed. Use this to see it run the way a server runs it.
 
 **You need:** Python 3.11 or newer, Git, and either **Docker Desktop** (easiest) or **PostgreSQL 16** installed on your machine.
 
@@ -63,7 +69,7 @@ QuickServe's database listens on port **5434** on your machine, not the usual 54
 | Project | Ports |
 |---|---|
 | QuickKart | 5432 (database), 5433 (test database), 8080, 1025, 8025 |
-| QuickServe | 5434 (database), 8000 (API) |
+| QuickServe | 5434 (database), 6380 (Redis), 8000 (API in developer mode), 8001 (API in Docker) |
 
 **Option B: without Docker.** Install PostgreSQL 16, make sure user `postgres` has password `postgres`, then create the two databases. Your own PostgreSQL normally listens on 5432, so in step 4 change the port in `DATABASE_URL` from `5434` to `5432`.
 
@@ -146,6 +152,37 @@ In Swagger, every step works the same way: click the endpoint, click **Try it ou
 
 **See the permissions work:** log out and try `POST /api/v1/orders` (you get `401`), or log in as the customer and try the restock (you get `403`). [Section 7](#7-login-tokens-and-permissions) explains every rule.
 
+### Shortcut: everything in Docker (no Python setup)
+
+Needs only Docker Desktop and the code (step 1). Open the **Terminal** app, `cd` into the `quickserve` folder, and run:
+
+```bash
+docker compose --profile app up -d --build                # build the image, start all five containers
+docker compose --profile app ps                           # wait until api shows "healthy"; migrate shows "Exited (0)"
+docker compose --profile app exec api python -m scripts.seed   # load the demo restaurants and accounts
+```
+
+Then open **http://127.0.0.1:8001/docs** (note **8001**, not 8000) and follow step 9. What starts:
+
+| Container | What it does | Port on your Mac |
+|---|---|---|
+| `quickserve-db` | PostgreSQL 16 | 5434 |
+| `quickserve-redis` | Redis 7 | 6380 |
+| `migrate` | Runs `alembic upgrade head`, then exits | none |
+| `quickserve-api` | The API (`uvicorn`) | **8001** |
+| `quickserve-worker` | The order timeout job, every 30 seconds | none |
+
+The API uses **8001** so it can run at the same time as the developer-mode server on 8000, and none of these ports clash with QuickKart.
+
+```bash
+docker compose --profile app logs -f api worker   # watch the JSON logs (Ctrl+C stops watching, not the app)
+docker compose --profile app down                 # stop everything (add -v to also delete the data)
+```
+
+Keep `--profile app` in the `down` command too. A plain `docker compose down` only stops the services without a profile (the database and Redis) and leaves the API and worker running [34].
+
+Changed some code? Run the `up -d --build` command again: Docker rebuilds only what changed (usually a few seconds) and replaces the containers. How the image is built, line by line, is in [docs/docker.md](docs/docker.md); why it's set up this way is in [the Docker Q&A](#docker-the-app-in-containers-phase-5).
+
 ### Other useful commands
 
 ```bash
@@ -172,6 +209,9 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | `/health/ready` says `"redis": "down ..."` | The app still works without Redis (no cache, no login limits). Check `docker compose ps` shows `quickserve-redis` healthy with `0.0.0.0:6380->6379/tcp`, and that `.env` has `REDIS_URL=redis://localhost:6380/0` (copy it from `.env.example`) |
 | `ModuleNotFoundError: No module named 'app'` | Run commands from the repository root with the venv activated |
 | PowerShell won't run `Activate.ps1` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, then try again |
+| `docker compose --profile app up` says `port is already allocated` for 8001 | Another container from an earlier test still holds it: `docker ps` to find it, `docker stop <name>` |
+| `docker compose down` says a network is `still in use` | The API and worker are still running. Use `docker compose --profile app down` |
+| `quickserve-api` stays `unhealthy` or keeps restarting | `docker compose --profile app logs api` shows why. If `migrate` failed, `docker compose --profile app logs migrate` |
 | Tests say `Refusing to run tests ...` | Safety guard: tests empty their database, so they only run on a database whose name ends in `_test` and on Redis database number 15. Unset any `DATABASE_URL` or `REDIS_URL` you exported in your shell |
 
 ---
@@ -188,6 +228,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| Dockerfile and the whole stack in Docker (Phase 5) | [Docker Q&A](#docker-the-app-in-containers-phase-5); `Dockerfile`, `.dockerignore`, `docker-compose.yml` (profile `app`), `requirements.lock`, [docs/docker.md](docs/docker.md), the `docker` job in CI |
 | Redis cache, rate limiting, logout, worker, JSON logs (Phase 4) | [Section 8](#8-redis-the-background-worker-and-logs-phase-4); `app/core/redis.py`, `app/core/logging.py`, `app/worker.py`, `app/modules/menu/cache.py` |
 | Everything in the README, as natural questions and answers | This file |
 
@@ -203,7 +244,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Background jobs | A separate worker (`python -m app.worker`) expires unpaid orders and auto-rejects orders the restaurant didn't accept, every 30 seconds; safe to run several (`FOR UPDATE SKIP LOCKED`); graceful shutdown | |
 | Caching and logs | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses | Metrics and dashboards (Phase 7) |
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
-| DevOps | Alembic migrations (tested up and down), PostgreSQL in Docker Compose, CI pipeline, liveness/readiness checks, pinned and locked dependencies | Dockerfile for the app, AWS, Terraform, Kubernetes |
+| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code and smoke-tests the built containers, liveness/readiness checks, pinned and locked dependencies | Pushing the image to a registry, AWS, Terraform, Kubernetes |
 
 Everything except browsing restaurants and menus needs a login. Orders belong to the logged-in customer, and who may change an order's status is decided by the login token, never by the request body. See [section 7](#7-login-tokens-and-permissions).
 
@@ -434,19 +475,58 @@ flowchart LR
 
 ### 3.7 CI pipeline (runs on every push and pull request)
 
+Two jobs run side by side, so adding the Docker job didn't make CI slower.
+
 ```mermaid
 flowchart LR
-    push["git push or pull request"] --> pg["Start PostgreSQL 16 service container"]
-    pg --> inst["pip install -r requirements-dev.lock"]
-    inst --> lint["ruff check and ruff format --check"]
-    lint --> mig["alembic upgrade head and alembic check"]
-    mig --> test["pytest: 81 tests"]
-    test --> ok{"all green?"}
+    push["git push or pull request"] --> pg
+    push --> lock
+
+    subgraph test["job: test"]
+        pg["Start PostgreSQL 16 and Redis 7 service containers"] --> inst["pip install -r requirements-dev.lock"]
+        inst --> lint["ruff check and ruff format --check"]
+        lint --> mig["alembic upgrade head and alembic check"]
+        mig --> pyt["pytest: 81 tests"]
+    end
+
+    subgraph docker["job: docker"]
+        lock["requirements.lock matches the tested lock"] --> build["docker compose --profile app up --build"]
+        build --> ready["wait for /health/ready"]
+        ready --> smoke["seed, log in, call /users/me, check non-root user and worker"]
+        smoke --> stop["SIGTERM the worker: stops cleanly?"]
+        stop --> size["write image size to the run summary"]
+    end
+
+    pyt --> ok{"both green?"}
+    size --> ok
     ok -->|yes| merge["safe to merge"]
     ok -->|no| fix["fix before merging"]
 ```
 
-### 3.8 Where it's heading (planned, Phases 4 to 7)
+### 3.8 The whole stack in Docker Compose (Phase 5)
+
+```mermaid
+flowchart LR
+    you["You: browser or curl"] -->|"localhost:8001"| api
+
+    subgraph net["Compose network: containers find each other by name"]
+        migrate["migrate: alembic upgrade head, then exits"]
+        api["api: uvicorn, port 8000 inside"]
+        worker["worker: python -m app.worker"]
+        db[("db: PostgreSQL 16")]
+        redis[("redis: Redis 7")]
+    end
+
+    migrate -->|"db:5432"| db
+    api -->|"db:5432"| db
+    api -->|"redis:6379"| redis
+    worker -->|"db:5432"| db
+    worker -->|"redis:6379"| redis
+```
+
+Start order, enforced by `depends_on`: `db` healthy → `migrate` finishes with exit code 0 → `api` and `worker` start. If the migration fails, the API never starts with a half-updated schema.
+
+### 3.9 Where it's heading (planned, Phases 6 to 8)
 
 ```mermaid
 flowchart TB
@@ -478,7 +558,7 @@ flowchart TB
     prom -.->|"scrape metrics"| app2
 ```
 
-Only PostgreSQL and Redis are in Docker today; the rest of this last diagram is the plan for the phases in the [roadmap](#13-roadmap).
+The app already runs in containers (3.8); the AWS part of this diagram is the plan for the phases in the [roadmap](#13-roadmap).
 
 ---
 
@@ -1039,6 +1119,56 @@ python -m app.worker
 
 `http://127.0.0.1:8000/health/ready` should show `"database": "ok", "redis": "ok"`.
 
+Or skip the two terminals and run everything in containers: `docker compose --profile app up -d --build`, then use port 8001 (next part).
+
+### Docker: the app in containers (Phase 5)
+
+The Dockerfile itself is explained line by line in [docs/docker.md](docs/docker.md). These are the questions about how it all fits together.
+
+### Q: Why put the app in a container at all? It already runs with `uvicorn`.
+
+On your Mac it runs because your Mac has the right Python, the right packages in a venv and the right settings. A server has none of that. An image packs the code, Python and every package into one file that runs the same everywhere: your laptop, CI, AWS, Kubernetes. "Works on my machine" stops being a sentence anyone says. Every later phase (ECS on AWS, Kubernetes) runs this exact image.
+
+### Q: Why is the Dockerfile split into two stages?
+
+The first stage (`builder`) installs the packages into a virtual environment. The second stage (`runtime`) starts again from a clean `python:3.11-slim` and copies in only that finished environment and our code. pip's caches, build leftovers and the tools used to install things stay behind in the first stage. Smaller image, less to download on every deploy, and fewer programs an attacker could use [31].
+
+### Q: Why does the container run as a user called `app` and not root?
+
+If someone finds a bug that lets them run commands inside the container, they get the powers of the user the app runs as. As root, they could change any file in the container and have an easier path to attacking the host. As `app`, a user with no home and no login shell, they can't even overwrite the app's own code. Docker's own guidance is to drop root whenever the app doesn't need it [31]. CI checks this on every run: `whoami` inside the API container must print `app`.
+
+### Q: The image installs `requirements.lock`. Why not `requirements.txt`?
+
+`requirements.txt` pins only the packages we chose. Build the same commit next month and pip could pull a newer version of some dependency of a dependency, one the tests never ran with (exactly what happened with `starlette`; see [section 9](#q-why-both-requirements-devtxt-and-requirements-devlock)). `requirements.lock` pins all 37 runtime packages. The tests run on `requirements-dev.lock`, so CI checks that every line of `requirements.lock` appears, at the same version, in the dev lock. The image therefore contains exactly what was tested, minus pytest and ruff.
+
+### Q: The API, the worker and the migration job: three images?
+
+One image, three commands. `migrate` runs `alembic upgrade head`, `api` runs the Dockerfile's default command (`uvicorn`), `worker` runs `python -m app.worker`. Compose tags it three times, but the layers are shared, so it takes the disk space of one. One image means the API and the worker can never be on different versions of the code, and there's only one thing to build, scan and store.
+
+### Q: Why is the migration its own container instead of the first thing the API does?
+
+Picture production with five API containers starting together during a deploy. If each one ran `alembic upgrade head` on start, five processes would try to change the same tables at once. Running the migration **once per deploy**, before the new API version starts, is the standard pattern (on Kubernetes it becomes a Job, on ECS a one-off task). Compose expresses it with `depends_on: condition: service_completed_successfully` [33]: the API waits until `migrate` has exited with code 0, and doesn't start at all if it failed.
+
+### Q: Inside Docker the database URL says `db:5432`. On my Mac it's `localhost:5434`. Why?
+
+Compose puts the containers on a private network where each one is reachable by its **service name** on its **normal** port. The API container connects to `db:5432`. The `5434:5432` line in `docker-compose.yml` is only a door from your Mac into that network, and it exists so that you (and the developer-mode API) can reach the database. Inside a container, `localhost` means that container itself, which is why `localhost:5434` wouldn't work there.
+
+### Q: Why is the worker's health check switched off?
+
+The Dockerfile's `HEALTHCHECK` asks `http://127.0.0.1:8000/health`. That's right for the API. The worker runs the same image but listens on no port, so the check would always fail and Docker would mark it `unhealthy` forever. `healthcheck: disable: true` in Compose turns it off for the worker and the migration job. A better worker check, such as a heartbeat timestamp the worker writes every pass, comes with monitoring in Phase 7.
+
+### Q: What happens when I run `docker compose stop`?
+
+Docker sends `SIGTERM` to process 1 in each container. Because the Dockerfile uses the exec form (`CMD ["uvicorn", ...]`, not `CMD uvicorn ...`), process 1 is Python itself and receives it directly, instead of a shell that would swallow it. Uvicorn finishes the requests in progress; the worker finishes its current pass and logs `worker stopped cleanly`. If a container is still running after its grace period (10 seconds by default, 20 for the worker), Docker sends `SIGKILL`. CI tests the worker's clean stop on every run. Kubernetes does exactly the same when it moves a pod, which is why this matters later.
+
+### Q: What does the CI `docker` job prove that the tests don't?
+
+The tests prove the code is right. The `docker` job proves the **image** is right: it builds, it starts, the migrations run inside it, it reaches the database and Redis by service name, the seed script and login work, it runs as non-root, and the worker stops cleanly. Many deploy failures are not code bugs but a missing file in the image, a wrong path or a setting that only exists on someone's laptop; this job catches them before merge. It also writes the image size into the run's summary page, so a sudden jump is visible in review.
+
+### Q: What does the image cost?
+
+Claude Code measured it on the Mac: about **387 MB** on disk and about **82 MB** compressed, which is what a registry stores and every deploy downloads. Only about 0.3 MB of that is our code; most is Python and the libraries. Amazon ECR charges about USD 0.10 per GB per month for storage, for every version kept; pulls within the same AWS region are free, but cross-region pulls are billed per GB [32]. Check current pricing for your region before relying on these numbers. So in Phase 6 we'll add a registry lifecycle rule that keeps only the last few versions. The cheap wins already taken: a `slim` base image, two stages, no test tools in the image, and a `.dockerignore` that keeps `venv/`, `.git/` and tests out of the build.
+
 ---
 
 ## 9. DevOps already in the project
@@ -1047,9 +1177,9 @@ python -m app.worker
 
 Because the features that make this app correct (row locks, `SKIP LOCKED`, partial unique indexes, `RETURNING`, CHECK constraints under concurrency, Read Committed re-checks) either don't exist in SQLite or behave differently there. A test that passes on SQLite would prove nothing about production. The test suite builds its database **by running the real Alembic migrations**, down and up, so every test run also tests the migrations.
 
-### Q: Why are only the database and Redis in Docker right now?
+### Q: What runs in Docker Compose?
 
-Docker Compose runs PostgreSQL 16 and Redis 7, the same major versions as CI and, later, AWS. The app runs on your machine with `--reload` for fast edit-and-retry while learning. Phase 5 adds a Dockerfile and an `api` service. The Compose file already shows two production habits: a **healthcheck** for each service (`pg_isready`, `redis-cli ping`), so dependants wait until they're truly ready, and **resource limits**, which on a laptop protect your machine and in the cloud are what you pay for.
+PostgreSQL 16 and Redis 7 always, the same major versions as CI and, later, AWS. With `--profile app` [34] it also builds the app image and runs the migration job, the API and the worker ([the Docker Q&A](#docker-the-app-in-containers-phase-5)). Without the profile, you run the app on your machine with `--reload` for fast edit-and-retry. The Compose file already shows two production habits: a **healthcheck** for each service (`pg_isready`, `redis-cli ping`), so dependants wait until they're truly ready, and **resource limits**, which on a laptop protect your machine and in the cloud are what you pay for.
 
 ### Q: What does the CI pipeline do, and why each step?
 
@@ -1064,10 +1194,11 @@ Docker Compose runs PostgreSQL 16 and Redis 7, the same major versions as CI and
 | `pytest` | All 81 tests, including the concurrency, login-attack and Redis-outage tests |
 | `concurrency: cancel-in-progress` | Two quick pushes cancel the older run instead of paying for both |
 | `timeout-minutes: 10` | A hung job can't burn CI minutes forever |
+| A second job, `docker`, in parallel | Builds the image and smoke-tests the whole stack in containers ([details](#q-what-does-the-ci-docker-job-prove-that-the-tests-dont)) |
 
 ### Q: Why both `requirements-dev.txt` and `requirements-dev.lock`?
 
-`requirements*.txt` pins the packages we chose. But those packages have their own dependencies, which aren't pinned. This bit us while building the project: a fresh install pulled a newer `starlette` (1.10.0, where another environment had 1.7.0), and the tests started printing a deprecation warning about the HTTP test client. The `.lock` file is `pip freeze` from an environment where the whole test suite passed on Python 3.11: every package at an exact version. CI and, later, the Docker image install from the lock, so a new release of some sub-dependency can't break a build overnight. You regenerate the lock on purpose, when you upgrade.
+`requirements*.txt` pins the packages we chose. But those packages have their own dependencies, which aren't pinned. This bit us while building the project: a fresh install pulled a newer `starlette` (1.10.0, where another environment had 1.7.0), and the tests started printing a deprecation warning about the HTTP test client. The `.lock` file is `pip freeze` from an environment where the whole test suite passed on Python 3.11: every package at an exact version. CI installs from the lock, and the Docker image from `requirements.lock` (the runtime-only subset, checked against it in CI), so a new release of some sub-dependency can't break a build overnight. You regenerate the lock on purpose, when you upgrade.
 
 ### Q: What's the difference between `/health` and `/health/ready`?
 
@@ -1163,6 +1294,10 @@ Explaining the cycle data this way shows you understand FinOps as a way of think
 | One JSON log line per request, uvicorn's duplicate access log off | Log platforms bill by volume ingested and stored |
 | Container resource limits in Compose | The habit that becomes Kubernetes requests/limits, which decide node count and therefore cost |
 | Separate dev and runtime dependencies | Smaller production images: faster pulls, less registry storage |
+| Slim base image, two-stage build, `.dockerignore` | About 82 MB compressed; registry storage and cross-region pulls bill per GB |
+| One image for API, worker and migrations | One thing to build, scan and store instead of three |
+| CI writes the image size to every run's summary | A size jump is seen in review, not on the bill |
+| Limits on every container in Compose (API 1 CPU / 512 MB, worker 0.5 CPU / 256 MB) | First guesses for the Kubernetes requests and limits that decide node count in Phase 7 |
 
 ### Q: How do I avoid a surprise AWS bill?
 
@@ -1229,9 +1364,13 @@ quickserve/
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
 ├── tests/                        81 tests, real PostgreSQL and Redis
-├── .github/workflows/ci.yml
-├── docker-compose.yml
+├── docs/docker.md                the Dockerfile explained line by line
+├── .github/workflows/ci.yml      two jobs: test, and docker (build + smoke test)
+├── Dockerfile                    two-stage image, runs as user "app"
+├── .dockerignore                 keeps venv/, .git/, tests and .env out of the image
+├── docker-compose.yml            db + redis; profile "app" adds migrate, api, worker
 ├── requirements.txt / requirements-dev.txt / requirements-dev.lock
+├── requirements.lock             runtime-only pins the image installs
 ├── pyproject.toml                ruff and pytest settings
 └── .env.example
 ```
@@ -1275,7 +1414,8 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 |---|---|---|
 | **3. Auth** (done) | Login, JWT access tokens, four roles, ownership checks, rider role migration | Authentication vs authorization, hashing vs encryption, token expiry, object-level authorization |
 | **4. Redis, jobs, logging** (done) | Redis menu cache invalidated on owner changes, worker running the timeout job every 30 seconds, login rate limiting and logout in Redis, JSON logs with request IDs | Cache invalidation, at-least-once jobs, rate limiting, log cost |
-| **5. Docker and CI/CD** (in progress) | Multi-stage Dockerfile, non-root user, Compose with `api` + `db` + `redis`, CI builds and pushes the image | Image layers and size, container networking |
+| **5. Docker and CI/CD** (done) | Multi-stage Dockerfile, non-root user, runtime lock file, Compose with `db` + `redis` + `migrate` + `api` + `worker`, CI builds the image and smoke-tests the running stack | Image layers and size, container networking, migrations as a one-off job, graceful shutdown |
+| **5b. Image registry** (next, with Phase 6) | CI pushes the image, tagged with the commit SHA, to a registry (GitHub Container Registry, then Amazon ECR), with a rule that deletes old versions | Immutable tags, registry storage cost |
 | **6. AWS and Terraform** | VPC, EC2 or ECS, RDS PostgreSQL, Secrets Manager, Nginx, everything in Terraform with remote state | IAM least privilege, public vs private subnets, `plan`/`apply`/`destroy` |
 | **7. Kubernetes and monitoring** | Minikube first: Deployments, Services, Ingress, ConfigMaps, Secrets, HPA, probes wired to `/health` and `/health/ready`; Prometheus + Grafana with the business signals above | Requests vs limits, rolling updates, what happens when a pod dies |
 | **8. FinOps and services** | Cost per order measured on EC2 vs Kubernetes, OpenCost, rightsizing; split out the notification service driven by `order_status_events` | Unit economics, event-driven design, the outbox pattern |
@@ -1366,3 +1506,7 @@ Business and tax figures change often; the dates show when each was reported.
 28. Docker documentation, *docker container stop* (SIGTERM, then SIGKILL after the timeout; 10 seconds by default for Linux containers). https://docs.docker.com/engine/reference/commandline/stop/
 29. Google Cloud blog, *Kubernetes best practices: terminating with grace* (default termination grace period of 30 seconds). https://cloud.google.com/blog/products/containers-kubernetes/kubernetes-best-practices-terminating-with-grace
 30. Redis documentation, *Key eviction* (eviction policies, including volatile-ttl). https://redis.io/docs/latest/develop/reference/eviction/
+31. Docker documentation, *Building best practices* (multi-stage builds, `.dockerignore`, running as a non-root user with `USER`). https://docs.docker.com/build/building/best-practices/
+32. AWS, *Amazon ECR pricing* (storage per GB-month; free same-region transfer to EC2, ECS and Fargate; cross-region transfer billed). https://aws.amazon.com/ecr/pricing/
+33. Docker documentation, *Control startup order in Compose* (`depends_on` with `service_healthy` and `service_completed_successfully`). https://docs.docker.com/compose/how-tos/startup-order/
+34. Docker documentation, *Using profiles with Compose*. https://docs.docker.com/compose/how-tos/profiles/
