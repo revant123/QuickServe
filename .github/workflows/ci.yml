@@ -262,6 +262,13 @@ jobs:
             kubectl kustomize "infra/k8s/overlays/$overlay" | ./kubeconform -strict -summary -
           done
 
+      - name: Check the Prometheus config and unit-test the alert rules
+        run: |
+          docker run --rm -v "$PWD/infra/k8s/monitoring:/etc/prometheus:ro" --entrypoint promtool \
+            prom/prometheus:v3.16.0 check config /etc/prometheus/prometheus.yml
+          docker run --rm -v "$PWD/infra/k8s/monitoring:/etc/prometheus:ro" -w /etc/prometheus --entrypoint promtool \
+            prom/prometheus:v3.16.0 test rules rules_test.yml
+
       - name: Build this commit's image
         run: docker build -t quickserve:ci .
 
@@ -299,10 +306,16 @@ jobs:
           kubectl -n $NS rollout status deployment/api --timeout=120s
           kubectl -n $NS exec -i deploy/worker -- python - check < infra/k8s/smoke_test.py
 
+      - name: Monitoring - Prometheus scrapes the pods, Grafana has the dashboard
+        run: |
+          kubectl -n $NS exec -i deploy/worker -- python - monitoring < infra/k8s/smoke_test.py
+          # The worker's liveness probe (its heartbeat) never had to restart it.
+          test "$(kubectl -n $NS get pods -l app.kubernetes.io/name=worker -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}')" = "0"
+
       - name: Show the cluster if something failed
         if: failure()
         run: |
           kubectl -n $NS get all,pvc,events --sort-by=.metadata.creationTimestamp || true
           kubectl -n $NS describe pods || true
-          for d in api worker; do kubectl -n $NS logs deploy/$d --all-containers --tail=100 || true; done
+          for d in api worker prometheus grafana; do kubectl -n $NS logs deploy/$d --all-containers --tail=100 || true; done
           kubectl -n $NS logs job/migrate --tail=100 || true

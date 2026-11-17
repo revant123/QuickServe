@@ -61,7 +61,7 @@ have no place in production.
 Why the `.lock` file and not `requirements.txt`? `requirements.txt` pins the
 libraries we chose, but not *their* dependencies. Build the same commit next
 month and pip could pick a newer sub-dependency that the tests never saw.
-`requirements.lock` pins all 37 packages, so every build of a commit gets the
+`requirements.lock` pins all 38 packages, so every build of a commit gets the
 packages that commit was tested with. CI checks that its versions match
 `requirements-dev.lock`, which is what the tests ran on.
 

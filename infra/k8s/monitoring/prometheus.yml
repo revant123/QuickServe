@@ -1,0 +1,37 @@
+# Prometheus configuration: what to scrape, how often, and which rules to run.
+global:
+  # Every 15 s. Halving it doubles the samples stored (and, on a managed
+  # service, billed). 15 s is plenty to see a problem within a minute.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules.yml
+
+scrape_configs:
+  # Find QuickServe's pods through the Kubernetes API instead of listing
+  # addresses by hand: pods come and go, and the list updates itself.
+  - job_name: quickserve
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [quickserve]
+    relabel_configs:
+      # Only pods that ask to be scraped (annotation prometheus.io/scrape: "true")...
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      # ...and only their port named "metrics" (9100 or 9101), not the API port.
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        action: keep
+        regex: metrics
+      # Readable labels on every series: app="api" or app="worker", and the pod name.
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        target_label: app
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+
+  # Prometheus watching itself.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     # Background worker: how often to run the order timeout job.
     worker_interval_seconds: int = 30
 
+    # Prometheus metrics, served on their OWN port, never on the public API port.
+    # 0 turns the metrics server off (tests do this). The API and the worker need
+    # different ports when they run on the same machine.
+    metrics_port: int = 9100
+    worker_metrics_port: int = 9101
+
     # Logging: JSON lines (for log tools) or plain text (easier to read while coding).
     log_level: str = "INFO"
     log_json: bool = True

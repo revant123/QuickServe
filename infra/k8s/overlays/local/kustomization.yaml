@@ -5,6 +5,7 @@ kind: Kustomization
 
 resources:
   - ../../base
+  - ../../monitoring
 
 images:
   - name: quickserve

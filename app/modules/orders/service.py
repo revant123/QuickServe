@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.exceptions import Conflict, Forbidden, InvalidTransition, NotFound, OutOfStock
 from app.core.logging import log_event
+from app.core.metrics import ORDER_STATUS_CHANGES, ORDER_VALUE, ORDERS_PLACED, after_commit
 from app.core.money import rupees
 from app.database.session import transaction
 from app.modules.menu import repository as menu_repo
@@ -102,6 +103,9 @@ def place_order(db: Session, data: OrderCreate, customer: User, settings: Settin
         db.add(order)
         db.flush()
         db.add(OrderStatusEvent(order_id=order.id, from_status=None, to_status=OrderStatus.PLACED, actor="customer"))
+    # The transaction has committed by this point, so the order really exists.
+    ORDERS_PLACED.inc()
+    ORDER_VALUE.observe(float(order.grand_total))
     log_event(
         log, logging.INFO, "order placed", order_id=order.id, restaurant_id=order.restaurant_id, total=order.grand_total
     )
@@ -169,6 +173,8 @@ def _apply(db: Session, order: Order, target: OrderStatus, actor: str, note: str
 
     order.status = target
     db.add(OrderStatusEvent(order_id=order.id, from_status=current, to_status=target, actor=actor, note=note))
+    # Counted only if this transaction commits (see app/core/metrics.py).
+    after_commit(db, lambda: ORDER_STATUS_CHANGES.labels(target.value, actor).inc())
     log_event(
         log, logging.INFO, "order status changed", order_id=order.id, frm=current.value, to=target.value, actor=actor
     )

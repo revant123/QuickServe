@@ -1,0 +1,10 @@
+# Load every dashboard JSON file in this folder at startup ("dashboards as code").
+apiVersion: 1
+providers:
+  - name: quickserve
+    folder: QuickServe
+    type: file
+    disableDeletion: true
+    allowUiUpdates: true # you can experiment in the UI; Git keeps the real copy
+    options:
+      path: /etc/grafana/dashboards

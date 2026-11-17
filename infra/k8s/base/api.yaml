@@ -32,6 +32,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: api
+      annotations:
+        prometheus.io/scrape: "true" # Prometheus scrapes the port named "metrics"
     spec:
       terminationGracePeriodSeconds: 30
       securityContext:
@@ -68,6 +70,8 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+            - name: metrics # not in the Service: only Prometheus, inside the cluster, reads it
+              containerPort: 9100
           envFrom:
             - configMapRef:
                 name: app-config

@@ -20,6 +20,10 @@ if "REDIS_URL" not in os.environ:
     _redis_base = Settings().redis_url.rsplit("/", 1)[0]
     os.environ["REDIS_URL"] = f"{_redis_base}/15"
 
+# No metrics HTTP servers in tests (tests read the metrics registry directly).
+os.environ.setdefault("METRICS_PORT", "0")
+os.environ.setdefault("WORKER_METRICS_PORT", "0")
+
 if "DATABASE_URL" not in os.environ:
     _app_url = make_url(Settings().database_url)
     os.environ["DATABASE_URL"] = _app_url.set(database=f"{_app_url.database}_test").render_as_string(

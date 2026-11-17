@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFound
+from app.core.metrics import MENU_CACHE
 from app.database.session import transaction
 from app.modules.menu import analytics
 from app.modules.menu import cache as menu_cache
@@ -129,6 +130,7 @@ def _badge(item: MenuItem, now: datetime) -> tuple[str | None, int | None]:
 def customer_menu_cached(db: Session, restaurant_id: uuid.UUID) -> tuple[list[MenuItemPublic], str]:
     """The menu page, through the Redis cache. Returns (items, HIT / MISS / BYPASS)."""
     items, status = menu_cache.get(restaurant_id)
+    MENU_CACHE.labels(status.lower()).inc()
     if items is not None:
         return items, status
     items = customer_menu(db, restaurant_id)

@@ -1,0 +1,126 @@
+# Unit tests for rules.yml: fake metric history in, expected alerts out.
+#   promtool test rules infra/k8s/monitoring/rules_test.yml
+# Series notation: 'a+bxN' = start at a, add b each interval, N more samples.
+rule_files:
+  - rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # 1. 10 of every 70 requests fail -> error alert fires after 5 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'quickserve_http_requests_total{method="GET",route="/api/v1/orders",status="200"}'
+        values: "0+60x30"
+      - series: 'quickserve_http_requests_total{method="GET",route="/api/v1/orders",status="500"}'
+        values: "0+10x30"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: QuickServeHighErrorRate
+        exp_alerts: [] # bad, but not for 5 minutes yet
+      - eval_time: 15m
+        alertname: QuickServeHighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "More than 5% of requests fail with a 5xx (14.29%)"
+              runbook: "kubectl -n quickserve logs deploy/api | grep '\"level\": \"ERROR\"'"
+
+  # 2. Only successful requests -> no error alert.
+  - interval: 1m
+    input_series:
+      - series: 'quickserve_http_requests_total{method="GET",route="/api/v1/orders",status="200"}'
+        values: "0+60x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: QuickServeHighErrorRate
+        exp_alerts: []
+    promql_expr_test:
+      - expr: quickserve:http_errors:ratio5m
+        eval_time: 15m
+        exp_samples:
+          - labels: "quickserve:http_errors:ratio5m"
+            value: 0 # 0%, not "no data"
+
+  # 3. The worker's last success never moves -> alert. It keeps moving -> silence.
+  - interval: 1m
+    input_series:
+      - series: "quickserve_worker_last_success_timestamp_seconds"
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: QuickServeWorkerFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "The order timeout job hasn't succeeded for 10m 0s"
+              runbook: "kubectl -n quickserve logs deploy/worker --tail=50"
+  - interval: 1m
+    input_series:
+      - series: "quickserve_worker_last_success_timestamp_seconds"
+        values: "0+60x20" # updated every minute, like a healthy worker
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: QuickServeWorkerFailing
+        exp_alerts: []
+
+  # 4. Prometheus can't reach any API pod -> alert after 2 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'up{app="api",pod="api-1"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: QuickServeAPIDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: QuickServeAPIDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: No API pod is answering Prometheus
+              runbook: "kubectl -n quickserve get pods; kubectl -n quickserve describe deploy/api"
+
+  # 5. Payments: 30 attempts an hour, half fail -> alert. Few attempts -> silence.
+  - interval: 1m
+    input_series:
+      - series: 'quickserve_payments_total{outcome="success"}'
+        values: "0+1x120"
+      - series: 'quickserve_payments_total{outcome="failed"}'
+        values: "0+1x120"
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: QuickServePaymentsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Only 50% of payments succeed"
+  - interval: 10m
+    input_series:
+      - series: 'quickserve_payments_total{outcome="failed"}'
+        values: "0+1x20" # 6 failures an hour: too few to page anyone
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: QuickServePaymentsFailing
+        exp_alerts: []
+
+  # 6. FinOps: 240 orders in the last hour at USD 0.04 an hour = USD 0.000167 per order.
+  - interval: 1m
+    input_series:
+      - series: "quickserve_orders_placed_total"
+        values: "0+4x120"
+    promql_expr_test:
+      - expr: quickserve:orders_placed:per_hour
+        eval_time: 90m
+        exp_samples:
+          - labels: "quickserve:orders_placed:per_hour"
+            value: 240
+      - expr: round(quickserve:cost_per_order_usd:1h, 0.000001)
+        eval_time: 90m
+        exp_samples:
+          - labels: "{}"
+            value: 0.000167
