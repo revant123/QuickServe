@@ -1,0 +1,154 @@
+"""Order lifecycle, the bill, and what each ending does to stock."""
+
+from decimal import Decimal
+
+import pytest
+from sqlalchemy import text
+
+from app.core.exceptions import InvalidTransition
+from app.modules.menu import repository as menu_repo
+from app.modules.menu.service import restock
+from app.modules.orders import repository as order_repo
+from app.modules.orders.model import OrderStatus as S
+from app.modules.orders.service import cancel, change_status, place_order, run_timeouts
+from app.modules.payments.model import Payment, PaymentStatus
+from app.modules.payments.schema import SimulatedOutcome
+from app.modules.payments.service import pay
+from tests.helpers import order_payload
+
+
+def _paid_order(db, customer, restaurant, *lines):
+    order = place_order(db, order_payload(customer, restaurant, *lines))
+    pay(db, order.id, f"key-{order.id}", SimulatedOutcome.success)
+    db.refresh(order)
+    return order
+
+
+def test_bill_below_free_delivery(db, restaurant, customer, make_item):
+    item = make_item(price="125.00", stock=10)
+    order = place_order(db, order_payload(customer, restaurant, (item, 2)))
+    # items 250 + packaging 20 + delivery 30 + platform 12
+    # GST food 5% of 270 = 13.50 ; GST fees 18% of 42 = 7.56
+    assert order.item_total == Decimal("250.00")
+    assert order.delivery_fee == Decimal("30.00")
+    assert order.gst_food == Decimal("13.50")
+    assert order.gst_fees == Decimal("7.56")
+    assert order.grand_total == Decimal("333.06")
+    assert order.items[0].unit_price == Decimal("125.00")
+
+
+def test_free_delivery_above_threshold(db, restaurant, customer, make_item):
+    item = make_item(price="150.00", stock=10)
+    order = place_order(db, order_payload(customer, restaurant, (item, 2)))
+    assert order.delivery_fee == Decimal("0.00")
+
+
+def test_price_snapshot_survives_menu_price_change(db, restaurant, customer, make_item):
+    item = make_item(price="150.00", stock=10)
+    order = place_order(db, order_payload(customer, restaurant, (item, 1)))
+    db.execute(text("UPDATE menu_items SET price = 999 WHERE id = :id"), {"id": item.id})
+    db.commit()
+    db.refresh(order)
+    assert order.items[0].unit_price == Decimal("150.00")
+
+
+def test_illegal_transitions_are_refused(db, restaurant, customer, make_item):
+    item = make_item(stock=10)
+    order = place_order(db, order_payload(customer, restaurant, (item, 1)))
+    with pytest.raises(InvalidTransition):
+        change_status(db, order.id, S.PREPARING, "restaurant")  # not paid or accepted yet
+    order = _paid_order(db, customer, restaurant, (item, 1))
+    for status, actor in [
+        (S.ACCEPTED, "restaurant"),
+        (S.PREPARING, "restaurant"),
+        (S.READY, "restaurant"),
+        (S.OUT_FOR_DELIVERY, "rider"),
+        (S.DELIVERED, "rider"),
+    ]:
+        change_status(db, order.id, status, actor)
+    with pytest.raises(InvalidTransition):
+        change_status(db, order.id, S.PREPARING, "restaurant")  # DELIVERED is final
+
+
+def test_wrong_actor_is_refused(db, restaurant, customer, make_item):
+    item = make_item(stock=10)
+    order = _paid_order(db, customer, restaurant, (item, 1))
+    with pytest.raises(InvalidTransition, match="rider"):
+        change_status(db, order.id, S.ACCEPTED, "rider")
+
+
+def test_cancel_before_payment_releases_stock(db, restaurant, customer, make_item):
+    item = make_item(stock=10)
+    order = place_order(db, order_payload(customer, restaurant, (item, 4)))
+    cancel(db, order.id, "customer", "Ordered by mistake")
+    db.refresh(item)
+    assert item.consumed == 0
+
+
+def test_cancel_after_restock_credits_the_old_cycle(db, restaurant, customer, make_item):
+    item = make_item(stock=10)
+    order = place_order(db, order_payload(customer, restaurant, (item, 3)))
+    restock(db, item.id, quantity=10, carry_over_leftover=False)
+
+    cancel(db, order.id, "customer", "Changed my mind")
+
+    db.refresh(item)
+    old, new = menu_repo.list_cycles(db, item.id)
+    assert item.consumed == 0  # the new cycle is untouched
+    assert old.units_consumed == 3 and old.units_returned == 3
+
+
+def test_cancel_while_preparing_counts_as_waste_and_refunds(db, restaurant, customer, make_item):
+    item = make_item(stock=10)
+    order = _paid_order(db, customer, restaurant, (item, 2))
+    change_status(db, order.id, S.ACCEPTED, "restaurant")
+    change_status(db, order.id, S.PREPARING, "restaurant")
+
+    with pytest.raises(InvalidTransition, match="contact support"):
+        cancel(db, order.id, "customer", "Too slow")
+    cancel(db, order.id, "support", "Rider unavailable")
+
+    db.refresh(item)
+    cycle = menu_repo.list_cycles(db, item.id)[0]
+    assert item.consumed == 2  # the food was cooked; it is not back on sale
+    assert cycle.units_wasted == 2
+    payment = db.query(Payment).filter_by(order_id=order.id).one()
+    db.refresh(payment)
+    assert payment.status is PaymentStatus.REFUNDED
+
+
+def test_restaurant_that_never_accepts_is_auto_rejected(db, restaurant, customer, make_item):
+    item = make_item(stock=10)
+    order = _paid_order(db, customer, restaurant, (item, 2))
+    db.execute(text("UPDATE orders SET accept_by = now() - interval '1 second' WHERE id = :id"), {"id": order.id})
+    db.commit()
+
+    report = run_timeouts(db)
+
+    assert report.auto_rejected == 1
+    db.refresh(order)
+    db.refresh(item)
+    assert order.status is S.REJECTED and item.consumed == 0
+    payment = db.query(Payment).filter_by(order_id=order.id).one()
+    db.refresh(payment)
+    assert payment.status is PaymentStatus.REFUNDED
+
+
+def test_unpaid_order_expires_and_frees_stock(db, restaurant, customer, make_item):
+    item = make_item(stock=3)
+    order = place_order(db, order_payload(customer, restaurant, (item, 3)))
+    db.execute(text("UPDATE orders SET pay_by = now() - interval '1 second' WHERE id = :id"), {"id": order.id})
+    db.commit()
+
+    assert run_timeouts(db).payment_expired == 1
+    db.refresh(order)
+    db.refresh(item)
+    assert order.status is S.PAYMENT_FAILED and item.available == 3
+
+
+def test_timeline_records_every_change(db, restaurant, customer, make_item):
+    item = make_item(stock=10)
+    order = _paid_order(db, customer, restaurant, (item, 1))
+    change_status(db, order.id, S.ACCEPTED, "restaurant")
+    steps = [(e.from_status, e.to_status, e.actor) for e in order_repo.list_events(db, order.id)]
+    assert steps == [(None, S.PLACED, "customer"), (S.PLACED, S.PAID, "system"), (S.PAID, S.ACCEPTED, "restaurant")]
