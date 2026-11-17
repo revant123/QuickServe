@@ -1,0 +1,59 @@
+# Continuous Integration: every push and pull request is linted and tested
+# against a real PostgreSQL, exactly like on your laptop.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# FinOps for CI: if you push twice quickly, cancel the older run instead of
+# paying (in minutes) for both.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10          # a hung job can't burn minutes forever
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: quickserve_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/quickserve_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"      # the oldest version we support
+          cache: pip                  # reuse downloaded packages between runs
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.lock   # exact versions; see README
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Check models and migrations agree
+        # Fails if someone changed a model but forgot to create a migration.
+        run: |
+          alembic upgrade head
+          alembic check
+
+      - name: Tests
+        run: pytest -q

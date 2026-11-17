@@ -1,0 +1,37 @@
+# Phase 2: only the database runs in Docker. The app runs on your machine with
+# `uvicorn --reload` so you get fast edit-and-retry while learning.
+# Phase 5 adds an `api` service built from a Dockerfile.
+#
+#   docker compose up -d        start PostgreSQL in the background
+#   docker compose ps           check it is healthy
+#   docker compose down         stop it (data survives in the volume)
+#   docker compose down -v      stop it AND delete the data
+
+services:
+  db:
+    image: postgres:16-alpine        # same major version as CI and (later) AWS RDS
+    container_name: quickserve-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres    # local only; real secrets come from a secrets manager in Phase 6
+      POSTGRES_DB: quickserve
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/create_test_db.sql:/docker-entrypoint-initdb.d/create_test_db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d quickserve"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # FinOps habit from day one: cap what a container may use. On a laptop this
+    # protects your machine; in the cloud, limits are what you pay for.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+volumes:
+  pgdata:

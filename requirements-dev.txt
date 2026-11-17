@@ -1,0 +1,6 @@
+# Tools for development and CI only. They never go into the production image,
+# which keeps it smaller (faster pulls, less storage, smaller attack surface).
+-r requirements.txt
+pytest==9.1.1
+httpx2==2.16.2   # the test client starlette now expects
+ruff==0.17.5
