@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes, Terraform, Prometheus, Grafana, GitHub Actions. **140 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, GitHub Actions. **147 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
 
 ---
 
@@ -32,6 +32,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
    - [Monitoring (Phase 7b)](#monitoring-phase-7b)
    - [Notifications and the outbox pattern (Phase 8)](#notifications-and-the-outbox-pattern-phase-8)
    - [Alert emails and rightsizing (Phase 8b: FinOps)](#alert-emails-and-rightsizing-phase-8b-finops)
+   - [HTTPS front door: Gateway API (Phase 9)](#https-front-door-gateway-api-phase-9)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -125,7 +126,7 @@ python -m app.worker                # terminal 2 (venv active): runs the order t
 |---|---|
 | http://127.0.0.1:8000/health/ready | `{"status":"ready","database":"ok","redis":"ok"}` |
 | http://127.0.0.1:8000/docs | Swagger UI with every endpoint |
-| `pytest -q` (in another terminal, venv active) | `140 passed` |
+| `pytest -q` (in another terminal, venv active) | `147 passed` |
 
 ### Step 9: Place your first order in Swagger
 
@@ -234,6 +235,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| HTTPS front door (Phase 9) | [Gateway Q&A](#https-front-door-gateway-api-phase-9); `infra/k8s/gateway/` (certificates, Gateway, routes, policies), `infra/k8s/addons.sh`, `infra/k8s/gateway_check.sh`, `app/core/client_ip.py`, `tests/test_client_ip.py` |
 | Alert emails and rightsizing (Phase 8b: FinOps) | [Phase 8b Q&A](#alert-emails-and-rightsizing-phase-8b-finops); `infra/k8s/monitoring/alertmanager.yml` + `alertmanager.yaml` (Alertmanager, Mailpit), the Watchdog and rightsizing rules in `rules.yml`, `infra/k8s/rightsizing.py`, `tests/test_rightsizing.py` |
 | Notification service with the outbox pattern (Phase 8) | [Outbox Q&A](#notifications-and-the-outbox-pattern-phase-8); `app/modules/outbox/`, `app/modules/notifications/`, `app/notifier.py`, `infra/k8s/base/notifier.yaml`, `tests/test_notifications.py` |
 | Monitoring and alerts (Phase 7b) | [Monitoring Q&A](#monitoring-phase-7b); `app/core/metrics.py`; `infra/k8s/monitoring/` (Prometheus config, `rules.yml` + `rules_test.yml`, Grafana dashboard); worker `--healthcheck`; `tests/test_metrics.py` |
@@ -256,7 +258,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Background jobs | A separate worker (`python -m app.worker`) expires unpaid orders and auto-rejects orders the restaurant didn't accept, every 30 seconds; safe to run several (`FOR UPDATE SKIP LOCKED`); graceful shutdown | |
 | Caching, logs and metrics | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses; Prometheus metrics (RED + business), 6 tested alert rules, a Grafana dashboard with cost per order; Alertmanager emails with grouping, inhibition and a Watchdog; a rightsizing report priced in USD | Tracing, real cost data (OpenCost) |
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
-| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), Kubernetes manifests deployed and tested on a kind cluster in every CI run (rolling update with zero failed requests), liveness/readiness checks, pinned and locked dependencies | Applying the Terraform to a real AWS account, Ingress with HTTPS |
+| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), Kubernetes manifests deployed and tested on a kind cluster in every CI run (rolling update with zero failed requests), liveness/readiness checks, pinned and locked dependencies, an HTTPS front door (Gateway API with Envoy Gateway, certificates from cert-manager, host routing, an edge rate limit) | Applying the Terraform to a real AWS account, NetworkPolicies |
 
 Everything except browsing restaurants and menus needs a login. Orders belong to the logged-in customer, and who may change an order's status is decided by the login token, never by the request body. See [section 7](#7-login-tokens-and-permissions).
 
@@ -501,7 +503,7 @@ flowchart LR
         pg["Start PostgreSQL 16 and Redis 7 service containers"] --> inst["pip install -r requirements-dev.lock"]
         inst --> lint["ruff check and ruff format --check"]
         lint --> mig["alembic upgrade head and alembic check"]
-        mig --> pyt["pytest: 140 tests"]
+        mig --> pyt["pytest: 147 tests"]
     end
 
     subgraph docker["job: docker"]
@@ -1533,7 +1535,7 @@ The cluster disappears when the job ends. Before any of that, `kubeconform` chec
 
 ### Q: What's not done yet?
 
-- **Ingress with HTTPS.** The API is reached through `port-forward` for now.
+- **Ingress with HTTPS.** Done in Phase 9, with Gateway API instead of Ingress: see [HTTPS front door](#https-front-door-gateway-api-phase-9).
 - **NetworkPolicies** ("only the API may talk to PostgreSQL"). These need a network plugin that enforces them.
 - **Metrics and dashboards** (Prometheus and Grafana).
 - **A worker heartbeat** so Kubernetes can tell a stuck worker from a busy one.
@@ -1966,6 +1968,161 @@ On top of everything from Phase 7b:
    That last one tests the whole chain: rule → Prometheus → Alertmanager → SMTP → inbox.
 4. A new step runs `rightsizing.py` against the live cluster, so the report can't silently break.
 
+### HTTPS front door: Gateway API (Phase 9)
+
+Until now every service was reached with its own `kubectl port-forward`, over plain HTTP. Phase 9 adds what a real deployment has in front of its apps: **one front door** that ends HTTPS, sends each hostname to the right service, redirects plain HTTP, and turns away abuse before it costs CPU.
+
+```mermaid
+flowchart LR
+    you["Browser / curl"] -->|"https://quickserve.localhost:8443"| envoy
+    you -->|"https://grafana.quickserve.localhost:8443"| envoy
+    subgraph egs["namespace envoy-gateway-system"]
+        envoy["Envoy proxy (Service quickserve-gateway): TLS, routing, rate limit"]
+        eg["Envoy Gateway controller"]
+    end
+    eg -.->|"reads Gateway + HTTPRoutes, configures"| envoy
+    subgraph qs["namespace quickserve"]
+        api["Service api -> API pods"]
+        grafana["Service grafana"]
+        cert["Secret quickserve-tls"]
+    end
+    cm["cert-manager"] -.->|"creates and renews"| cert
+    envoy -->|"Host: quickserve.localhost"| api
+    envoy -->|"Host: grafana.quickserve.localhost"| grafana
+    envoy -.->|"uses"| cert
+```
+
+### Q: How do I open it?
+
+After `infra/k8s/deploy.sh`, in its own terminal:
+
+```bash
+kubectl -n envoy-gateway-system port-forward service/quickserve-gateway 8443:443
+```
+
+Then open **https://quickserve.localhost:8443/docs** (Swagger) and **https://grafana.quickserve.localhost:8443** (Grafana) in Chrome. Names ending in `.localhost` always point to your own machine, so there's nothing to add to `/etc/hosts`.
+
+The browser warns that the certificate isn't trusted. That's expected: it was signed by QuickServe's own small certificate authority (CA), which your Mac doesn't know. In Chrome, click **Advanced → Proceed**. To see a clean check, give curl the CA:
+
+```bash
+kubectl -n quickserve get secret quickserve-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/quickserve-ca.crt
+curl --cacert /tmp/quickserve-ca.crt --resolve quickserve.localhost:8443:127.0.0.1 https://quickserve.localhost:8443/health/ready
+```
+
+`--resolve` makes curl connect to 127.0.0.1 (the port-forward) while still using the real hostname for TLS and routing. To check everything at once, run `infra/k8s/gateway_check.sh`. It's the same check CI runs; see the last question.
+
+### Q: Why Gateway API and not an Ingress?
+
+Two reasons, one practical and one about design.
+
+**The practical one.** The most used Ingress controller, the community **ingress-nginx**, is retired. Kubernetes announced in November 2025 that maintenance would stop in March 2026, and recommended moving to Gateway API or another controller right away [72]. After that date there are no releases, bug fixes or security patches, and the repository is archived and read-only [73]. A new project in late 2026 shouldn't start on it.
+
+**The design one.** Ingress puts everything in one object, and anything beyond the basics goes into controller-specific annotations. Gateway API splits it by **who owns what**:
+
+| Object | Owned by | In QuickServe |
+|---|---|---|
+| `GatewayClass` | the platform team: which software runs gateways | `quickserve-envoy` → Envoy Gateway |
+| `Gateway` | the cluster operator: ports, TLS, which namespaces may attach | `quickserve`: port 80 (redirect only) and 443 (HTTPS) |
+| `HTTPRoute` | each app team: hostnames, paths, which Service | `api`, `grafana`, `https-redirect` |
+
+Timeouts, redirects and header changes are standard fields, not annotations. Gateway API v1.5 (2026) moved more features to the stable channel, including TLSRoute and a CORS filter [74].
+
+**Envoy Gateway** is the implementation here. It's an Envoy project that turns these objects into a running Envoy proxy, and one of the implementations that pass the Gateway API conformance tests [75]. On AWS, the AWS Load Balancer Controller can play the same role with the same YAML.
+
+### Q: What are the add-ons, and why aren't they in `infra/k8s/base`?
+
+`infra/k8s/addons.sh` installs two cluster-wide components, at pinned versions, from their official release files:
+
+- **Envoy Gateway v1.10.0**, which also brings the Gateway API CRDs (v1.6.1);
+- **cert-manager v1.21.3**.
+
+`deploy.sh` runs it first, and it skips what's already installed at that version. They're kept apart from QuickServe's own manifests because they belong to the **cluster**, not the app. Many apps would share one cert-manager, and its CRDs must exist before any `Certificate` can be created. Pinned versions mean an upgrade is a change you test, not a surprise on the next deploy.
+
+### Q: How does HTTPS work here?
+
+cert-manager builds a three-step chain, the same shape as the real internet ([`tls.yaml`](infra/k8s/gateway/tls.yaml); cert-manager's CA issuer and Gateway docs [77]):
+
+1. **A self-signing issuer.** It's used once, to create...
+2. **...the "QuickServe Local CA"**: a 10-year certificate authority, stored in the Secret `quickserve-ca`.
+3. **The site certificate**, `quickserve-tls`, signed by that CA, for `quickserve.localhost` and `grafana.quickserve.localhost`. It lasts 90 days, like Let's Encrypt's. cert-manager renews it 30 days before it expires, with a new key each time, and Envoy picks up the new one without a restart.
+
+Why a CA instead of one self-signed site certificate? Because you can trust the CA **once**, and every future certificate it signs is trusted too. On a public site, step 2 would instead be an **ACME issuer** (Let's Encrypt): cert-manager proves you own the domain and gets a certificate every browser already trusts. Nothing else changes.
+
+**TLS ends at Envoy** ("TLS termination"). From Envoy to the pods, inside the cluster, traffic is plain HTTP. Encrypting that hop too (mTLS) is what service meshes do; it's the next step in a zero-trust setup.
+
+Expired certificates are a classic cause of outages, even at big companies. Automatic renewal is the fix; the next step would be an alert on certificate age.
+
+### Q: What does the gateway do besides HTTPS?
+
+All of these are configured in [`routes.yaml`](infra/k8s/gateway/routes.yaml) and [`policies.yaml`](infra/k8s/gateway/policies.yaml):
+
+| Feature | How | Why |
+|---|---|---|
+| HTTP → HTTPS | `RequestRedirect` filter, 301 | Nobody ends up on an unencrypted page by typing the bare name |
+| Host-based routing | `hostnames:` on each HTTPRoute | One IP, one certificate, one load balancer for many apps |
+| Unknown hostnames | no route matches → Envoy's 404 | Random scanners never reach the API |
+| HSTS | `Strict-Transport-Security: max-age=300` | Tells browsers "only HTTPS from now on". 5 minutes while learning; a real site uses a year once HTTPS works everywhere |
+| `X-Content-Type-Options: nosniff` | response header | Stops browsers guessing file types (a classic attack trick) |
+| Request timeout 15 s | `timeouts.request` | A stuck request gets a 504 instead of holding a connection forever |
+| Request IDs | `ClientTrafficPolicy` `requestID: PreserveOrGenerate` | One ID in Envoy's access log and in the API's log line |
+| `/metrics` unreachable | the `api` Service only has port 80 | Metrics stay private; only Prometheus, inside the cluster, reads them |
+
+A note on the redirect through a port-forward: it keeps the non-standard port, so `http://...:8081` would send you to `https://...:8081`, which is the wrong port. That's an artifact of port-forwarding. Behind a real load balancer on ports 80 and 443 it's exactly right. Just use the HTTPS address.
+
+### Q: Why rate-limit login at the gateway, when the API already does?
+
+They're two different layers:
+
+- **The API** (Phase 4, Redis) counts **failed** logins **per email and per IP**. It protects *accounts*.
+- **The gateway** caps login requests **in total**: 60 a minute per Envoy instance, whoever sends them. It protects *CPU and money*. Every login the API sees costs about 0.1 s of Argon2 hashing; a flood stopped by Envoy costs almost nothing.
+
+It's Envoy Gateway's **local** rate limit: each Envoy pod counts on its own, so 2 Envoy pods allow 120 a minute in total. A local limit can't count *per client IP*. That needs the **global** rate limit, which keeps shared counters in Redis [76]. The CI check sends 75 requests to the login path and expects Envoy to answer some of them with 429 `local_rate_limited`, before they reach the API.
+
+### Q: The gateway broke the API's per-IP login limit at first. What happened?
+
+This is the most useful lesson of the phase, and the tests caught it before it was merged.
+
+Behind a proxy, **every request reaches the API from Envoy's pod**. If the API reads the TCP address (`request.client.host`), every customer has Envoy's IP. The "20 failed logins per IP" rule would then lock **everyone** out of login after 20 failures from **anyone**. That makes it a denial of service, built into the security feature.
+
+The standard answer is the `X-Forwarded-For` header. Envoy appends the address it received the request from:
+
+```
+X-Forwarded-For: <whatever the client sent>, <the address Envoy saw>
+```
+
+**The first attempt** was uvicorn's `--forwarded-allow-ips`, set to trust the pod network. uvicorn reads the header from the right and skips every *trusted* address. The CI check then sent a request from a pod with a forged `X-Forwarded-For: 6.6.6.6`, and the API logged it as coming from **6.6.6.6**. The client was itself inside the trusted range, so uvicorn skipped it too and believed the forged entry. (Setting it to `"*"`, a common tutorial answer, is worse: then uvicorn takes the left-most entry, which the client always controls.)
+
+**The fix** ([`app/core/client_ip.py`](app/core/client_ip.py)): trust **exactly one hop**. Use only the **last** entry, the one Envoy itself wrote, and only when the request comes from the proxy's network (`TRUSTED_PROXY_CIDRS`). Anything to its left is ignored. That's the same model as Envoy's own `xff_num_trusted_hops`. Unit tests cover:
+
+- a forged header;
+- a client inside the trusted network;
+- a request that bypasses the proxy;
+- garbage in the header;
+- the uvicorn behaviour that caused the bug.
+
+The CI check repeats the attack end to end and expects the worker pod's real IP in the API's log. The request log line now has `client_ip` for exactly this kind of investigation.
+
+The remaining gap: any pod in the cluster could call the API directly with a fake header, because the whole pod network is trusted. The fix for that is a **NetworkPolicy** that lets only the gateway (and Prometheus) reach the API pods, which needs a network plugin that enforces policies.
+
+### Q: What does the gateway cost?
+
+On minikube, memory. The Envoy Gateway controller asks for 256 Mi; the Envoy proxy asks for 128 Mi, set in the `EnvoyProxy` object; cert-manager adds three small pods. All of QuickServe still fits in minikube's 3 GB.
+
+On a cloud, the big item is the **load balancer**. Here the Envoy Service is `ClusterIP` and reached with `port-forward`. On AWS it would be `type: LoadBalancer`, which creates a real load balancer with an hourly charge plus a charge for traffic. That's why **one Gateway for every hostname** matters: one load balancer for the API, Grafana and any future app, not one each. The same logic makes the edge rate limit FinOps as well as security: requests stopped at Envoy never reach the pods that the autoscaler would otherwise add.
+
+### Q: What does CI check for the gateway?
+
+After all the earlier steps, `infra/k8s/gateway_check.sh` runs against the kind cluster from outside, the way a phone would connect:
+
+1. HTTPS works with a certificate signed by QuickServe's CA (curl verifies it), reaches the API, and returns the HSTS and request ID headers.
+2. Plain HTTP gets a 301 to HTTPS.
+3. The Grafana hostname reaches Grafana through the same Gateway.
+4. An unknown hostname gets 404 from Envoy.
+5. A request from the worker pod with a forged `X-Forwarded-For: 6.6.6.6` is logged by the API with the worker's real IP, under the same request ID.
+6. Repeated requests to the login path are partly stopped with Envoy's 429.
+
+Manifests for the new CRD types can't be checked by `kubeconform` (it has no schema for them), so they're skipped there. The API server then validates them for real when `deploy.sh` applies them on kind.
+
 ---
 
 ## 9. DevOps already in the project
@@ -1988,7 +2145,7 @@ PostgreSQL 16 and Redis 7 always, the same major versions as CI and, later, AWS.
 | `ruff check` and `ruff format --check` | Style arguments end; obvious bugs (unused imports, shadowed names) caught before review |
 | `alembic upgrade head` + `alembic check` | **Fails if someone changed a model but forgot to create a migration**, a very common production incident |
 | PostgreSQL 16 and Redis 7 **service containers** | Tests run against the same database and cache as production |
-| `pytest` | All 140 tests, including the concurrency, login-attack and Redis-outage tests |
+| `pytest` | All 147 tests, including the concurrency, login-attack and Redis-outage tests |
 | `concurrency: cancel-in-progress` | Two quick pushes cancel the older run instead of paying for both |
 | `timeout-minutes: 10` | A hung job can't burn CI minutes forever |
 | A second job, `docker`, in parallel | Builds the image and smoke-tests the whole stack in containers ([details](#q-what-does-the-ci-docker-job-prove-that-the-tests-dont)) |
@@ -2110,6 +2267,9 @@ Explaining the cycle data this way shows you understand FinOps as a way of think
 | minikube and kind for learning Kubernetes | A real cluster for USD 0; a managed control plane bills by the hour |
 | Metrics labelled by route template, no IDs; scrape every 15 s; keep 2 days / 1 GB | Managed Prometheus bills per sample [57]; fewer series, fewer samples |
 | Cost per order on the dashboard | The unit metric is visible to everyone, not hidden in a spreadsheet |
+| One Gateway (one load balancer on a cloud) for every hostname | Cloud load balancers bill by the hour plus traffic; one per app multiplies that |
+| Edge rate limit on login, at Envoy | A flood is refused for almost no CPU instead of ~0.1 s of Argon2 per attempt |
+| Envoy proxy requests set to 50m / 128 Mi | The add-on's defaults are sized for big clusters, not this one |
 | Rightsizing report: requests vs measured use, priced at Fargate's per-request rates | Shows reserved-but-idle capacity in dollars; recommends CPU from p95 and memory from the peak |
 | Requests NOT shrunk from an idle hour of data | Cheap today, outage on Friday night; size from a week that includes the busiest hours |
 | Alerts grouped and inhibited, repeats every 4 h (critical 1 h) | Fewer, better notifications; paging tools often bill per user or per notification |
@@ -2184,12 +2344,14 @@ quickserve/
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        140 tests, real PostgreSQL and Redis
+├── tests/                        147 tests, real PostgreSQL and Redis
 ├── infra/                        Terraform for AWS (Phase 6); start with infra/README.md
 │   ├── k8s/                      Kubernetes (Phase 7): base/ manifests, overlays/local and ci, deploy.sh,
 │   │                             smoke_test.py, rightsizing.py (Phase 8b: requests vs real use)
-│   │   └── monitoring/           Prometheus config, alert rules + their tests, Grafana dashboard (Phase 7b),
+│   │   ├── monitoring/           Prometheus config, alert rules + their tests, Grafana dashboard (Phase 7b),
 │   │                             Alertmanager + Mailpit (Phase 8b)
+│   │   └── gateway/              HTTPS front door (Phase 9): certificates, Gateway, routes, policies;
+│   │                             addons.sh installs Envoy Gateway + cert-manager, gateway_check.sh tests it
 │   ├── bootstrap/                budget alert + S3 state bucket, once per account
 │   ├── envs/dev/                 network, database, secrets, app server (+ tests/)
 │   └── modules/                  budget, network, database, app_server (each with tests/)
@@ -2252,7 +2414,8 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **7b. Monitoring** (done) | Prometheus metrics on a private port (RED + business + worker heartbeat), counters that move only after commit, Prometheus with recording and alert rules (unit-tested with promtool), a Grafana dashboard with cost per order, CI that checks scraping, alerts and the dashboard | The four golden signals, percentiles, cardinality, alert fatigue, unit metrics |
 | **8. Notification service** (done) | Transactional outbox written with every order change, a separate notifier process (own Deployment, metrics, liveness, alerts) that turns events into notifications: per-order ordering, retries with backoff, dead letters, idempotent consumer, retention; notifications API | Dual writes, the outbox pattern, at-least-once delivery, idempotency, poison messages, event-carried state |
 | **8b. FinOps and alerting** (done) | Alertmanager with routing, grouping, inhibition and a Watchdog, emailing a Mailpit inbox; CPU and memory recording rules per pod; a rightsizing report that prices requests vs real use in USD; a Grafana rightsizing row; CI checks the whole alert-to-email chain | Alert fatigue, dead man's switch, compressible vs incompressible resources, rightsizing, VPA |
-| **9. Next** (your choice) | Ingress with HTTPS; OpenCost on a real cloud cluster; tracing with OpenTelemetry; or applying the Phase 6 Terraform for a real deploy | |
+| **9. HTTPS front door** (done) | Gateway API with Envoy Gateway: one Gateway for every hostname, HTTP→HTTPS redirect, TLS from a local CA with automatic renewal (cert-manager), HSTS, timeouts, an edge rate limit on login, request IDs end to end; the API trusts exactly one proxy hop for the client IP; CI tests it all from outside the cluster | Gateway API vs Ingress, TLS termination, certificate chains, X-Forwarded-For spoofing, layered rate limiting |
+| **10. Next** (your choice) | NetworkPolicies (only the gateway may reach the API); tracing with OpenTelemetry; OpenCost on a real cloud cluster; or applying the Phase 6 Terraform for a real deploy | |
 
 ---
 
@@ -2303,6 +2466,12 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 **What's graceful shutdown?** Handle `SIGTERM`, finish the current unit of work, then exit before the orchestrator sends `SIGKILL`.
 
 **Why request IDs?** One ID ties together every log line from one request across modules and services, and users can quote it when reporting a problem.
+
+**Ingress or Gateway API?** Gateway API: roles are split (GatewayClass for the platform, Gateway for the operator, HTTPRoute for app teams), redirects, timeouts and header changes are standard fields instead of annotations, and the most used Ingress controller, ingress-nginx, was retired in March 2026.
+
+**How does a service behind a proxy get the real client IP?** From X-Forwarded-For, but only the entries your own proxies wrote: trust a fixed number of hops from the right, and only when the request comes from your proxy. Anything to the left is client-controlled. Trusting "*" or a whole network can let a client choose its own IP, which breaks per-IP rate limits and audit logs.
+
+**Where should TLS end?** Usually at the edge proxy (TLS termination), with certificates issued and renewed automatically (cert-manager, ACME). Encrypting the hop from proxy to pods as well (mTLS) is the zero-trust step, usually done with a service mesh.
 
 **How do you stop alert fatigue?** Alert on symptoms customers feel, add a `for:` duration, group related alerts into one notification, inhibit symptoms while their cause is firing, repeat slowly, and silence (don't delete) alerts during maintenance. Plus a Watchdog, an always-firing alert, so a broken alerting pipeline is noticed.
 
@@ -2387,3 +2556,9 @@ Business and tax figures change often; the dates show when each was reported.
 69. OpsLyft, *AWS Fargate pricing calculator* (October 2026 us-east-1 rates; memory billed as allocated, not used; ARM about 20% lower). https://www.opslyft.com/blog/aws-fargate-pricing-calculator
 70. Kubernetes documentation, *Proxying traffic to services* (the API server's `/api/v1/namespaces/<ns>/services/<name>:<port>/proxy` URL). https://kubectl.docs.kubernetes.io/guides/container_debugging/proxying_traffic_to_services/
 71. Kubernetes documentation, *Vertical Pod Autoscaling* (adjusts requests from historical usage). https://kubernetes.io/docs/concepts/workloads/autoscaling/vertical-pod-autoscale/
+72. Kubernetes blog, *Ingress NGINX Retirement: What You Need to Know* (November 2025; maintenance stops March 2026; migrate to Gateway API or another controller). https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/
+73. Fairwinds, *Kubernetes Is Moving On From ingress-nginx* (after March 2026 the repository is archived, read-only, with no releases, fixes or security patches). https://www.fairwinds.com/blog/kubernetes-ingress-nginx-2026-migration
+74. Kubernetes blog, *Gateway API v1.5: Moving features to Stable* (TLSRoute, ListenerSet, HTTPRoute CORS filter and more in the Standard channel). https://kubernetes.io/blog/2026/04/21/gateway-api-v1-5/
+75. Gateway API, *Implementations* (conformant implementations, including Envoy Gateway; AWS Load Balancer Controller integration). https://gateway-api.sigs.k8s.io/implementations/
+76. Envoy Gateway documentation, *Local Rate Limit* (per Envoy instance; no distinct per-value matching, use Global for that). https://gateway.envoyproxy.io/latest/tasks/traffic/local-rate-limit
+77. cert-manager documentation, *Securing gateway resources* (Gateway API support) and *CA issuer*. https://cert-manager.io/docs/usage/gateway/
