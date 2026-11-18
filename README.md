@@ -2933,6 +2933,8 @@ These are real, and they make better interview stories than any feature list.
 
 **7. Request IDs that went missing.** Log lines formatted after the request had finished lost their request ID, because it was read at formatting time. **Fix:** stamp it on each record when it's created. The lesson: **capture context when the event happens, not when you print it.**
 
+**8. A check that failed because the app got busier (Phase 12).** The CI step `docker compose logs notifier | grep -q "notifier started"` had passed for months. Then the Phase 12 seed started making real orders, so the notifier logged about 150 more lines, and the step failed with exit code 255 even though the line was there. `grep -q` stops reading at the first match. `docker compose logs` then writes into a closed pipe and fails, and `set -o pipefail` reports the failure of any command in the pipeline. With short logs, everything fit in the pipe's buffer before grep exited, so the bug stayed hidden. You can see it in one line: `set -o pipefail; seq 1 200000 | grep -q "^1$"` exits with 141. **Fix:** write the logs to a file, then grep the file. The lesson: **a check can depend on the size of its input. Watch for `| grep -q` and `| head` under pipefail.**
+
 ---
 
 ## 12. Project structure and API

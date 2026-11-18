@@ -114,15 +114,22 @@ jobs:
           # The container runs as the unprivileged "app" user, not root
           test "$(docker compose --profile app exec -T api whoami)" = "app"
 
-          # The worker started and the migration job finished successfully
-          docker compose --profile app logs worker | grep -q "worker started"
-          docker compose --profile app logs notifier | grep -q "notifier started"
+          # The worker started and the migration job finished successfully.
+          # Logs go to a file first, not "logs | grep -q": grep -q exits at the first
+          # match, the log command then writes into a closed pipe and fails, and
+          # pipefail turns that into a failed step. It only shows once the logs are
+          # long (the Phase 12 seed makes ~150 notifications), so it hid until then.
+          docker compose --profile app logs worker > worker.log
+          grep -q "worker started" worker.log
+          docker compose --profile app logs notifier > notifier.log
+          grep -q "notifier started" notifier.log
           test "$(docker inspect -f '{{.State.ExitCode}}' "$(docker compose --profile app ps -aq migrate)")" = "0"
 
       - name: Worker stops cleanly on SIGTERM
         run: |
           docker compose --profile app stop worker
-          docker compose --profile app logs worker | grep -q "worker stopped cleanly"
+          docker compose --profile app logs worker > worker.log
+          grep -q "worker stopped cleanly" worker.log
 
       - name: Image size (FinOps)
         # Registry storage and every deploy's download are paid per GB.
