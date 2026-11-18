@@ -33,7 +33,8 @@ for spec in sys.argv[2:]:
     got = "open" if s.connect_ex((host, int(port))) == 0 else "blocked"
     s.close()
     mark = "ok  " if got == want else "FAIL"
-    print(f"   {mark} {who:<10} -> {host}:{port:<5} {got:<7} (expected {want})")
+    target = f"{host}:{port}"
+    print(f"   {mark} {who:<10} -> {target:<44} {got:<7} (expected {want})")
     bad += got != want
 sys.exit(1 if bad else 0)
 '

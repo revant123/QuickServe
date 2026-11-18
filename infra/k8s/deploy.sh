@@ -134,5 +134,9 @@ echo "  kubectl -n $NS port-forward service/prometheus 9095:9090 -> http://127.0
 echo "  kubectl -n $NS port-forward service/alertmanager 9096:9093 -> http://127.0.0.1:9096 (grouped alerts, silences)"
 echo "  kubectl -n $NS port-forward service/mailpit 8026:8025    -> http://127.0.0.1:8026  (the alert emails)"
 echo
+echo "Checks you can run any time:"
+echo "  infra/k8s/gateway_check.sh   # HTTPS, routing, real client IP, edge rate limit"
+echo "  infra/k8s/netpol_check.sh    # network policies are really enforced (needs --cni=calico on minikube)"
+echo
 echo "FinOps: what the pods reserve vs what they use:"
 echo "  python3 infra/k8s/rightsizing.py"
