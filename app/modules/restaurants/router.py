@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.database.session import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.restaurants import service
-from app.modules.restaurants.schema import LocationUpdate, RestaurantCreate, RestaurantOut
+from app.modules.restaurants.schema import LocationUpdate, ProfileUpdate, RestaurantCreate, RestaurantOut
 from app.modules.users.model import User
 
 router = APIRouter(prefix="/restaurants", tags=["restaurants"])
@@ -33,3 +33,14 @@ def set_location(
 ):
     """The restaurant's owner (or an admin). Needed before a restaurant from before Phase 11 can take orders."""
     return service.set_location(db, restaurant_id, body, user)
+
+
+@router.put("/{restaurant_id}/profile", response_model=RestaurantOut)
+def set_profile(
+    restaurant_id: uuid.UUID,
+    body: ProfileUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """The restaurant's owner (or an admin). Cuisines and usual preparation time (Phase 12)."""
+    return service.set_profile(db, restaurant_id, body, user)

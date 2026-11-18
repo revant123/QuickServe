@@ -85,6 +85,18 @@ def order_and_notification(token):
     raise AssertionError("the notifier didn't deliver 'Payment received' within 30 s")
 
 
+def discovery():
+    """Phase 12 in the real cluster: the pg_trgm extension, the indexes and the seed's reviews."""
+    here = "lat=30.7333&lng=76.7794"  # Sector 22, Chandigarh: the seed's restaurants deliver here
+    _, page = get(f"/api/v1/restaurants/near?{here}&sort=rating")
+    names = [r["name"] for r in page["restaurants"]]
+    assert page["total"] >= 3 and names[0] == "Pal Dhaba", page
+    print("near me, by rating:", ", ".join(names))
+    _, found = get(f"/api/v1/search?q=paner&{here}")  # a typo on purpose
+    assert found["matched"] == "fuzzy" and any("Paneer" in d["name"] for d in found["dishes"]), found
+    print("search 'paner' (typo) found:", ", ".join(d["name"] for d in found["dishes"]))
+
+
 def check():
     status, body = get("/health/ready")
     assert status == 200 and body["database"] == "ok", body
@@ -98,6 +110,7 @@ def check():
     assert status == 200 and me["email"] == "customer@quickserve.dev", me
     print("logged in as:", me["email"], me["role"])
 
+    discovery()
     order_and_notification(token)
 
 

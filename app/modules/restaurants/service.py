@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import Forbidden, NotFound
 from app.database.session import transaction
 from app.modules.restaurants.model import Restaurant
-from app.modules.restaurants.schema import LocationUpdate, RestaurantCreate
+from app.modules.restaurants.schema import LocationUpdate, ProfileUpdate, RestaurantCreate
 from app.modules.users.model import Role, User
 
 
@@ -14,7 +14,9 @@ def create_restaurant(db: Session, data: RestaurantCreate, owner: User) -> Resta
     if owner.role not in (Role.RESTAURANT_OWNER, Role.ADMIN):
         raise Forbidden("Only restaurant owners can create restaurants")
     with transaction(db):
-        restaurant = Restaurant(owner_id=owner.id, **data.model_dump())
+        fields = data.model_dump()
+        fields["cuisines"] = ", ".join(fields["cuisines"])  # stored as one text column
+        restaurant = Restaurant(owner_id=owner.id, **fields)
         db.add(restaurant)
     return restaurant
 
@@ -54,4 +56,12 @@ def set_location(db: Session, restaurant_id: uuid.UUID, data: LocationUpdate, us
         restaurant = ensure_can_manage(db, restaurant_id, user)
         for field, value in data.model_dump().items():
             setattr(restaurant, field, value)
+    return restaurant
+
+
+def set_profile(db: Session, restaurant_id: uuid.UUID, data: ProfileUpdate, user: User) -> Restaurant:
+    with transaction(db):
+        restaurant = ensure_can_manage(db, restaurant_id, user)
+        restaurant.cuisines = ", ".join(data.cuisines)
+        restaurant.avg_prep_minutes = data.avg_prep_minutes
     return restaurant

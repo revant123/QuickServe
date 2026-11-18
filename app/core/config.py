@@ -130,6 +130,25 @@ class Settings(BaseSettings):
     gst_rate_food: Decimal = Decimal("0.05")  # restaurant food and packaging
     gst_rate_fees: Decimal = Decimal("0.18")  # the platform's own services: delivery, platform, small-order, surge
 
+    # --- Discovery (Phase 12): near me, ETA, ratings, search. See the README. ---
+    # ETA, the way Swiggy's engineering blog breaks it down:
+    #   max(find a rider + ride to the restaurant, cooking) + ride to you (+ handing over)
+    rider_first_mile_minutes: int = 8
+    rider_speed_kmph: Decimal = Decimal("20")  # average city speed, signals included
+    handoff_minutes: int = 4  # parking, finding the door, handing over
+    # Ratings. Fewer reviews than this shows "New" instead of an average.
+    rating_min_count: int = 3
+    # Ranking by rating uses a Bayesian average: every restaurant starts with this
+    # many imaginary reviews at the platform's average, so 1 five-star review
+    # can't beat 400 reviews averaging 4.6. Used until the platform has ratings.
+    rating_prior_weight: int = 10
+    rating_prior_mean: Decimal = Decimal("4.0")
+    # Customers can review an order for this many days after delivery.
+    review_window_days: int = 7
+    # Typo tolerance: how similar (0-1, pg_trgm word_similarity) a dish name must
+    # be when the exact search found nothing. "paner" vs "Kadhai Paneer" is 0.67.
+    search_fuzzy_threshold: float = 0.4
+
     @model_validator(mode="after")
     def refuse_dev_secret_outside_local(self):
         # Fail at startup, loudly, instead of running in production with a

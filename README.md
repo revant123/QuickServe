@@ -35,6 +35,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
    - [HTTPS front door: Gateway API (Phase 9)](#https-front-door-gateway-api-phase-9)
    - [Network policies (Phase 10)](#network-policies-phase-10)
    - [Pricing like Zomato and Swiggy (Phase 11)](#pricing-like-zomato-and-swiggy-phase-11)
+   - [Discovery: near me, search and ratings (Phase 12)](#discovery-near-me-search-and-ratings-phase-12)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -231,12 +232,13 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 |---|---|
 | Focus on how the ORM compares with writing SQL by hand | [Section 5](#5-orm-vs-writing-sql-by-hand); `app/modules/menu/analytics.py` (same report in ORM and raw SQL, tested equal); `scripts/show_sql.py`; `scripts/race_demo.py`; `tests/test_orm_behaviour.py` |
 | DevOps and FinOps as the top priority | [Section 9](#9-devops-already-in-the-project) and [Section 10](#10-finops-thinking-in-cost-per-order); `.github/workflows/ci.yml`; `docker-compose.yml`; health checks; connection pool settings; lock file |
-| Real business logic from Zomato / Swiggy | [Section 6](#6-business-rules-borrowed-from-zomato-and-swiggy): accept timeout, out-of-stock-until, itemised bill with platform fee and GST, cancellation rules, idempotent payments. [Phase 11](#pricing-like-zomato-and-swiggy-phase-11): distance-based delivery fee, free delivery rules, small order fee, peak/late-night/rain surge, coupons with race-safe limits, quotes with price-change protection |
+| Real business logic from Zomato / Swiggy | [Section 6](#6-business-rules-borrowed-from-zomato-and-swiggy): accept timeout, out-of-stock-until, itemised bill with platform fee and GST, cancellation rules, idempotent payments. [Phase 11](#pricing-like-zomato-and-swiggy-phase-11): distance-based delivery fee, free delivery rules, small order fee, peak/late-night/rain surge, coupons with race-safe limits, quotes with price-change protection. [Phase 12](#discovery-near-me-search-and-ratings-phase-12): restaurants near me with delivery time, ranking by rating, typo-tolerant search, reviews only for delivered orders |
 | Stock + consumer logic instead of QuickKart's `stock - 1` | [Section 4](#4-the-inventory-design-stock-consumed-and-cycles); `app/modules/menu/model.py` |
 | Restock resets the consumer counter to zero | `restock()` in `app/modules/menu/service.py`, which archives the cycle first so no data is lost |
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| Discovery: near me, search, ratings (Phase 12) | [Discovery Q&A](#discovery-near-me-search-and-ratings-phase-12); `app/modules/discovery/` (near me, ETA, Bayesian rating, search), `app/modules/reviews/`, `app/modules/pricing/geo.py` (bounding box), `tests/test_discovery.py`, `tests/test_reviews.py` |
 | Pricing, coupons and surge (Phase 11) | [Pricing Q&A](#pricing-like-zomato-and-swiggy-phase-11); `app/modules/pricing/` (calculator, geo, rain switch), `app/modules/coupons/`, `POST /orders/quote`, `tests/test_pricing.py`, `tests/test_checkout.py` |
 | Network policies (Phase 10) | [Network policy Q&A](#network-policies-phase-10); `infra/k8s/network-policies/`, `infra/k8s/netpol_check.sh`, `infra/k8s/smoke.sh` |
 | HTTPS front door (Phase 9) | [Gateway Q&A](#https-front-door-gateway-api-phase-9); `infra/k8s/gateway/` (certificates, Gateway, routes, policies), `infra/k8s/addons.sh`, `infra/k8s/gateway_check.sh`, `app/core/client_ip.py`, `tests/test_client_ip.py` |
@@ -349,6 +351,8 @@ erDiagram
     COUPONS ||--o{ COUPON_REDEMPTIONS : "used in"
     ORDERS ||--o| COUPON_REDEMPTIONS : "discounted by"
     RESTAURANTS ||--o{ COUPONS : "funds (optional)"
+    ORDERS ||--o| REVIEWS : "rated in"
+    RESTAURANTS ||--o{ REVIEWS : receives
 
     USERS {
         uuid id PK
@@ -364,6 +368,19 @@ erDiagram
         numeric latitude
         numeric longitude
         numeric delivery_radius_km
+        string cuisines
+        int avg_prep_minutes
+        int rating_count
+        int rating_sum
+    }
+    REVIEWS {
+        uuid id PK
+        uuid order_id FK,UK
+        uuid restaurant_id FK
+        uuid customer_id FK
+        smallint rating
+        string comment
+        timestamptz created_at
     }
     MENU_ITEMS {
         uuid id PK
@@ -376,6 +393,7 @@ erDiagram
         int consumed
         int cycle_no
         timestamptz sold_out_at
+        tsvector search_vector
     }
     INVENTORY_CYCLES {
         uuid id PK
@@ -456,6 +474,9 @@ Rules the **database itself** enforces, so a bug in Python can't break them:
 | `ck_order_items_quantity_positive`, `ck_menu_items_price_positive` | No zero/negative quantities or prices |
 | `ck_coupons_uses_within_limit` | A coupon can never be recorded as used more times than its limit, even under a race or a bug (Phase 11) |
 | `uq_coupon_redemptions_order_id` | At most one coupon per order; a retried request can't apply it twice |
+| `uq_reviews_order_id` | One review per order, even if "Submit" is tapped twice at once (Phase 12) |
+| `ck_restaurants_rating_totals_consistent` | `rating_sum` is between `rating_count` and 5 × `rating_count`: the running totals can't describe impossible reviews (Phase 12) |
+| `ck_reviews_rating_1_to_5` | Stars are 1 to 5, whatever the API layer lets through |
 
 ### 3.4 What happens when a customer places and pays for an order
 
@@ -2479,6 +2500,258 @@ Restaurants created before Phase 11 (by you, not the seed) can set their locatio
 
 The tests switch the surge hours off by default (`PEAK_HOURS=[]` in `conftest.py`), because otherwise a test run at 8 pm would add a peak fee and fail. Tests about surge pass their own settings. A test suite whose result depends on the time of day is a classic source of flaky CI.
 
+### Discovery: near me, search and ratings (Phase 12)
+
+Phase 11 priced an order once the customer had chosen a restaurant. Phase 12 is the step before that: **finding** one. That's the first screen of every food app, and it's mostly a database problem:
+
+- `GET /api/v1/restaurants/near` lists the open restaurants that deliver to where you are, with distance, delivery time, delivery fee and rating. You can sort by distance, rating or delivery time, and filter by cuisine or minimum rating.
+- `GET /api/v1/search?q=...` finds dishes and restaurants, but only from places that deliver to you. It also handles typos.
+- `POST /api/v1/orders/{id}/review` lets a customer rate a **delivered** order once. `GET /api/v1/restaurants/{id}/reviews` shows the star breakdown and the newest reviews.
+
+What the seed data shows from Sector 22, Chandigarh, sorted by rating:
+
+```
+Pal Dhaba       3.4 km  40-45 min  4.6 (10 reviews)  delivery Rs 30
+Dosa Junction   2.8 km  25-30 min  New (1 review)    delivery Rs 30
+Sindhi Sweets   1.0 km  15-20 min  4.0 (4 reviews)   delivery Rs 20
+```
+
+Dosa Junction's only review is 5 stars, so its plain average is 5.0. It still ranks below Pal Dhaba's 4.6, and the reason is a classic piece of statistics, explained below.
+
+### Q: How does "restaurants near me" find restaurants without measuring the distance to every one?
+
+It works in two steps. Cheap SQL with an index first, then exact maths on the few rows that are left:
+
+```mermaid
+flowchart LR
+    A["Customer at (lat, lng)"] --> B["1. SQL + B-tree index<br/>restaurants inside a rectangle<br/>around the customer"]
+    B --> C["2. Python<br/>exact road distance (geo.road_km)<br/>within the restaurant's radius<br/>and the platform's 8 km?"]
+    C --> D["sort, filter, page<br/>add ETA, fee, rating"]
+```
+
+**Why not just compute the distance in SQL?** `WHERE distance(restaurant, customer) < 6 km` is a formula over each row's columns. An ordinary index is sorted by the column, not by "distance from wherever this customer happens to be", so PostgreSQL has to evaluate the formula on every row in the table. A rectangle is different: `latitude BETWEEN a AND b AND longitude BETWEEN c AND d` is a pair of ranges, and a B-tree index answers ranges directly.
+
+The rectangle has to contain the whole delivery circle. Its height is the radius as an angle (radius ÷ Earth's radius). Its width is larger, because lines of longitude get closer together away from the equator: at Chandigarh's latitude (30.7°N) a degree of longitude is only about 96 km, compared with 111 km for a degree of latitude. `geo.bounding_box` uses Jan Philip Matuschek's formulas, including the cases near a pole and across the 180° meridian [88]. The rectangle is sized for the furthest anyone may deliver (8 km by road, which is 6.4 km in a straight line). So it can include a few restaurants too many, never too few.
+
+**Measured.** I loaded 100,000 restaurants spread across India plus 300 around Chandigarh, and ran both versions:
+
+| Query | Plan | Time |
+|---|---|---|
+| Rectangle (`BETWEEN`) | Index Scan using `ix_restaurants_location` | **0.44 ms** (283 rows in the rectangle) |
+| Distance formula in `WHERE` | Seq Scan, 100,078 rows read and thrown away | **136 ms** |
+
+That's about 300 times faster. 283 restaurants were inside the rectangle and 226 were inside the circle. That ratio is close to π/4, the share of a square that a circle inside it covers, so the rectangle wastes little.
+
+**Honest limits of a B-tree on (latitude, longitude).** The index sorts by latitude first, so it jumps straight to the latitude band. Inside that band it still checks the longitude of every entry, which is a whole strip of the country at that latitude. That's fine for a city or a few hundred thousand rows. Real geo systems use indexes built for two dimensions: PostGIS with a GiST index, or a grid of cells (geohash, Uber's H3) where "near me" means "these 7 cells". PostGIS isn't in the `postgres:16-alpine` image we run in Docker, Kubernetes and CI. `earthdistance`, the built-in alternative, isn't a "trusted" extension, so it would need superuser rights. The rectangle needs neither, and it shows the idea those tools are built on.
+
+### Q: Why does the list use the same distance function as checkout?
+
+If the list said "delivers to you" and checkout then said "too far", the customer would have no reason to trust either. `nearby()` and Phase 11's `conditions_for()` both call `geo.road_km` with the same detour factor and the same rounding to 0.1 km, and both apply the restaurant's radius and the 8 km platform limit. A test (`test_the_list_and_checkout_never_disagree`) quotes an order from every listed restaurant and checks the distances match exactly. It also checks that a restaurant 8.06 km away is missing from the list **and** refused at checkout.
+
+### Q: Where does "25-30 min" come from?
+
+From the way Swiggy's engineering blog breaks down delivery time [89]:
+
+```
+Delivery time = max(assignment delay + first mile, prep time) + last mile
+```
+
+A rider is found and rides to the restaurant **while** the kitchen cooks, so only the slower of the two counts. QuickServe uses averages for each part, all of them settings:
+
+| Part | QuickServe | Real platforms |
+|---|---|---|
+| Find a rider and ride to the restaurant | `rider_first_mile_minutes` = 8 | Predicted from live rider supply and demand in the zone |
+| Prep time | `avg_prep_minutes` per restaurant (owners set it with `PUT /restaurants/{id}/profile`) | Predicted per order from the items, the kitchen's current load and the time of day |
+| Last mile | road km at `rider_speed_kmph` = 20 | Predicted from historical and live traffic, plus the time to get from the gate to the door [89] |
+| Handing over | `handoff_minutes` = 4 | Part of the last-mile model |
+
+Example: Pal Dhaba takes 25 minutes to cook, and 3.4 km at 20 km/h is 11 minutes. So 25 + 11 + 4 = 40, shown as "40-45 min". The app shows a range because a promise to the minute would be broken most of the time.
+
+### Q: Why not sort by the average rating?
+
+Because then one lucky 5-star review beats hundreds of good ones. Evan Miller's well-known article calls sorting by the plain average a mistake for exactly this reason [90]. The fix used here is a **Bayesian average**: pretend every restaurant starts with C extra reviews at the platform's average m [91][92]:
+
+```
+score = (C × m + sum of its ratings) / (C + number of its ratings)
+```
+
+With few reviews, the score stays close to m. As real reviews pile up they outweigh the C imaginary ones, and the score moves towards the restaurant's own average. IMDb has published the same formula for its Top 250 films, where C is the minimum number of votes to be listed and m is the mean vote across all films [92]. QuickServe uses C = 10 (`rating_prior_weight`), and m is the average of every rating on the platform.
+
+The demo numbers: m = 78 stars / 18 reviews on the platform = 4.33, so C × m = 43.3.
+
+| Restaurant | Reviews | Plain average | Bayesian score |
+|---|---|---|---|
+| Pal Dhaba | 10, totalling 46 | 4.6 | (43.3 + 46) / 20 = **4.47** |
+| Dosa Junction | 1, totalling 5 | 5.0 | (43.3 + 5) / 11 = **4.39** |
+| Sindhi Sweets | 4, totalling 16 | 4.0 | (43.3 + 16) / 14 = **4.24** |
+
+What customers **see** is still the plain average, because that's what people expect to read. Below 3 reviews (`rating_min_count`) they see "New" instead, like on Zomato and Swiggy. The `min_rating=4.0` filter uses the shown average, so "4.0+" never shows a 3.9. Miller's later article goes a step further and ranks by the lower bound of a confidence interval [93]. That penalises uncertainty more strictly, at the cost of more maths.
+
+### Q: Why store `rating_count` and `rating_sum` on the restaurant, instead of `AVG(rating)` over the reviews?
+
+Because the list is read far more often than reviews are written. A page of 20 restaurants would otherwise run an `AVG()` over each one's reviews on every app open. Storing two running totals makes reading free. The price is that **the totals must never drift from the reviews**, and there are four guards:
+
+1. **One atomic statement.** The counters change with `UPDATE restaurants SET rating_count = rating_count + 1, rating_sum = rating_sum + 4`. PostgreSQL does the arithmetic on the latest committed value, under the row lock.
+2. **Same transaction.** The review row and the counter change commit together or not at all. The `INSERT` runs first (`flush()`), so a duplicate review fails before the counters move.
+3. **A CHECK constraint.** `rating_sum BETWEEN rating_count AND 5 * rating_count`, because every review is 1 to 5 stars. A bug that double-counts or loses a review usually breaks it, and then fails loudly.
+4. **A recount job.** `POST /admin/jobs/recompute-ratings` recounts every restaurant from its reviews and reports how many were wrong. It should always report 0. Anything else means a bug, or someone edited the table by hand.
+
+**The race, measured.** The tempting ORM version reads the number into Python, adds one and writes it back:
+
+```python
+r = db.get(Restaurant, order.restaurant_id)  # SELECT
+r.rating_count = r.rating_count + 1  # Python does the maths
+r.rating_sum = r.rating_sum + data.rating  # UPDATE ... SET rating_count = 7 (a constant!)
+```
+
+I swapped this into the service and ran `test_ten_reviews_at_once_are_all_counted` three times: 10 customers reviewing at the same moment. The totals counted **3, 4 and 3** of the 10 reviews. The others were lost updates: two transactions read the same old count, and both wrote "old + 1". The atomic version counts all 10, every time. It's the same lesson as Phase 2's stock counter and Phase 11's coupons, and it's why the cheat sheet says "put the arithmetic in the UPDATE".
+
+**ORM and hand-written SQL, side by side.** Posting a review uses the ORM: `update(Restaurant).values(rating_count=Restaurant.rating_count + 1)` builds exactly the atomic SQL above. The recount job is written in SQL by hand, because it's an UPDATE driven by an aggregate over another table, which reads more clearly as SQL:
+
+```sql
+WITH truth AS (
+    SELECT r.id, count(v.id) AS n, coalesce(sum(v.rating), 0) AS total
+    FROM restaurants r LEFT JOIN reviews v ON v.restaurant_id = r.id
+    GROUP BY r.id
+)
+UPDATE restaurants SET rating_count = truth.n, rating_sum = truth.total
+FROM truth
+WHERE restaurants.id = truth.id
+  AND (restaurants.rating_count, restaurants.rating_sum) IS DISTINCT FROM (truth.n, truth.total)
+RETURNING restaurants.id, restaurants.name
+```
+
+`LEFT JOIN` puts a restaurant whose reviews were all removed back to 0. `IS DISTINCT FROM` touches only rows that are wrong, and `RETURNING` reports which ones they were.
+
+### Q: Can the recount job itself get it wrong?
+
+Yes, without care. Under PostgreSQL's default isolation level (READ COMMITTED), the job counts the reviews it can see when its statement starts. Suppose a review commits between that count and the job's write. The job would then overwrite the new total with its older count, and lose that review.
+
+So the job first locks the restaurant rows (`SELECT ... FOR UPDATE`), then recounts in a new statement:
+- A review that **finished** before the lock is already in the count.
+- A review that's **halfway done** has inserted its row but can't commit yet: its counter UPDATE waits for the job's lock. When the job commits, the review adds its +1 to the corrected total.
+
+At Swiggy's scale you would recount in batches of restaurants, not all of them under one lock.
+
+### Q: Who may write a review?
+
+The same rules both apps follow: you rate an **order** you received, not a restaurant you've heard of.
+
+| Rule | How it's enforced |
+|---|---|
+| Only the customer who placed the order | Service check; anyone else gets `404`, which doesn't even confirm the order exists (the BOLA rule from Phase 3) |
+| Only after it was `DELIVERED` | Service check, `422` |
+| Only within 7 days of delivery (`review_window_days`) | Measured from the `DELIVERED` event in the order's timeline, by the database clock |
+| Once per order | `UNIQUE (order_id)` on `reviews`: two taps on "Submit" at the same moment give one `201` and one `409`. There's a test for it |
+| 1 to 5 stars, comment up to 500 characters | Pydantic (`422`) **and** a CHECK constraint |
+| Reviewer shown by first name only | `GET /restaurants/{id}/reviews` returns "Priya", never the email or full name |
+
+This makes fake reviews expensive, because each one needs a paid, delivered order. It doesn't make them impossible. Real platforms add fraud models on top, for example to catch many reviews from accounts linked to the restaurant.
+
+### Q: How does search work?
+
+PostgreSQL has three text tools, and search uses all of them:
+
+| Tool | Finds | Index |
+|---|---|---|
+| **Full-text search**: `search_vector @@ websearch_to_tsquery('english', q)` | Whole words in the name **or description**, with English stemming ("biryanis" finds "Biryani", "momo" finds "Momos"). Name words weigh more than description words when ranking | GIN on a generated `tsvector` column [94] |
+| **Substring**: `name ILIKE '%naan%'` | The text anywhere in the name | GIN trigram index (`gin_trgm_ops`) [95] |
+| **Similarity**: `q <% name` | Close spellings: "paner" finds "Kadhai Paneer", "biriyani" finds "Biryani" | The same trigram index [95] |
+
+`search_vector` is a **generated column**: PostgreSQL computes it from `name` and `description` on every insert and update. It can't go stale, and no code has to remember to fill it, which is the approach PostgreSQL's documentation recommends over triggers [94].
+
+**Why are typos a second step, not always on?** Trigram similarity means "shares enough three-letter chunks" (`word_similarity`, from 0 to 1). It catches typos, and it also catches things that merely look alike. These are the real values for some queries:
+
+| Query | Dish | `word_similarity` |
+|---|---|---|
+| paner | Kadhai Paneer | 0.67 |
+| biriyani | Chicken Biryani | 0.55 |
+| panner | Paneer Tikka | 0.43 |
+| chai | Masala Chai | 1.00 |
+| chai | **Butter Chicken** | **0.40** |
+
+A threshold low enough to catch "panner" (0.4) also says "chai" looks like "Butter Chicken". So search tries the exact tools first. Only if they find **nothing** does it repeat with similarity (threshold `search_fuzzy_threshold` = 0.4, set with `set_config(..., true)` for that one transaction). The response says which happened (`"matched": "exact" | "fuzzy" | "none"`), so the app can show "Showing results for similar dishes". That's the same idea as a search engine's "Did you mean".
+
+Searches are also counted by outcome (`quickserve_searches_total{outcome}`). Search teams watch the share of **zero-result searches** closely, because each one is a customer who wanted something and didn't find it.
+
+Search also:
+- only returns dishes from restaurants that deliver to you;
+- hides dishes that are switched off or sold out;
+- escapes `%` and `_`, so searching "100%" doesn't match everything.
+
+### Q: Do the indexes actually get used?
+
+`EXPLAIN` shows the plan PostgreSQL picks. For the exact search, it combines both GIN indexes with a BitmapOr:
+
+```
+Bitmap Heap Scan on menu_items
+  Recheck Cond: ((search_vector @@ '''paneer'''::tsquery) OR ((name)::text ~~* '%paneer%'::text))
+  ->  BitmapOr
+        ->  Bitmap Index Scan on ix_menu_items_search_vector
+        ->  Bitmap Index Scan on ix_menu_items_name_trgm
+```
+
+On 300,000 dishes, "shahi paneer" took **13 ms** with the indexes and **83 ms** with them switched off (a parallel scan of the whole table).
+
+Two things are worth knowing:
+
+1. **On a tiny table PostgreSQL ignores the index, and it's right to.** Reading 20 rows is faster than walking an index. So the tests switch table scans off (`SET LOCAL enable_seqscan = off`). That proves the index **can** serve the query, without pretending the planner would choose it on demo data.
+2. **The real search also says "only these nearby restaurants".** With 283 restaurants nearby, the planner preferred `ix_menu_items_restaurant_id`: it fetched those restaurants' ~850 dishes and checked the text on each, in **3.5 ms**. The GIN indexes matter when the location filter isn't selective, for example in a dense city centre with thousands of restaurants nearby. The planner chooses per query, based on table statistics, which is why `ANALYZE` matters.
+
+### Q: What would change at Zomato or Swiggy scale?
+
+The ideas carry over, but each piece gets its own system:
+- **Geo.** A grid of cells (geohash or H3). Which restaurants serve each cell is often computed ahead of time, because it also depends on live rider supply, not just distance.
+- **Search.** A dedicated engine (Elasticsearch or OpenSearch) kept in sync from the database. It handles synonyms ("curd" = "dahi"), Hindi and Hinglish spellings, autocomplete and ranking by popularity.
+- **Ranking.** Machine-learning models that mix distance, rating, delivery time, price, your past orders and promotions. Sponsored listings are paid placements in this list.
+- **Ratings.** Rating counts updated through events (like our outbox in Phase 8) rather than in the same transaction. That gives eventual consistency, with a reconciliation job like ours as the safety net.
+- **Pagination.** Our sort runs in Python, because the sort key (distance from *this* customer) isn't a column. At scale, the listing service computes and caches the ranked list per area for a short time.
+
+### Q: How do I try it?
+
+After merging, deploy as usual. Then run the seed again. It adds cuisines and prep times, two more restaurants (Dosa Junction in Sector 35, and Momo Point in Mohali) and demo reviews. The reviews are made **through real orders**: place, pay, cook, deliver, review, using the same code as the API. They come from five demo reviewer accounts, so the main demo customer's first order (and WELCOME50) stays unused.
+
+```bash
+kubectl -n quickserve exec deploy/api -- python -m scripts.seed      # Kubernetes
+docker compose --profile app run --rm migrate python -m scripts.seed # or Docker Compose
+```
+
+Then open these in Swagger (`/docs`) or the browser. No login is needed:
+
+```
+/api/v1/restaurants/near?lat=30.7333&lng=76.7794&sort=rating     Sector 22: three restaurants
+/api/v1/restaurants/near?lat=30.7046&lng=76.7179                 Mohali: Momo Point appears, Pal Dhaba is too far
+/api/v1/search?q=paner&lat=30.7333&lng=76.7794                   a typo: "matched": "fuzzy"
+/api/v1/search?q=south indian&lat=30.7333&lng=76.7794            a cuisine finds Dosa Junction
+/api/v1/restaurants/{id}/reviews                                 the star breakdown
+```
+
+To write a review yourself, take an order through to `DELIVERED` as in Phase 3 (customer pays; owner accepts, prepares, marks it ready; rider picks it up and delivers it). Then, as the customer, call `POST /api/v1/orders/{id}/review` with `{"rating": 5, "comment": "..."}`. Call it a second time to see the `409`.
+
+### Q: What's tested?
+
+**40 new tests**, 244 in total:
+- **`test_discovery.py`, 28 tests:**
+  - the rectangle contains 2,000 random points inside the radius, at four latitudes;
+  - it's twice as wide at 60° as at the equator, and covers every longitude near a pole or the 180° meridian;
+  - ETA when the kitchen is slower and when the rider is;
+  - the Bayesian sort;
+  - which restaurants are listed (closed, no location, beyond their radius, beyond 8 km);
+  - list and checkout agree, including at the 8 km edge;
+  - filters and pagination;
+  - search by name, description, stemming and cuisine; four typos; "chai" not finding "Butter Chicken"; sold-out dishes hidden; `%` escaped; zero results counted;
+  - `EXPLAIN` showing the location and GIN indexes can serve the queries;
+  - the endpoints and owner profile updates.
+- **`test_reviews.py`, 12 tests:**
+  - every rule in the table above;
+  - the CHECK constraint;
+  - 10 simultaneous reviews all counted;
+  - a double-tap counted once;
+  - the recount job finding and fixing drift;
+  - the star breakdown, and the endpoints.
+- **The migration** was tested up, down and up again, and on a database seeded with the Phase 11 code.
+- **The in-cluster smoke test** now also checks the rating sort and a typo search against the real Kubernetes database, which proves the `pg_trgm` extension and the migration work there too.
+
 ---
 
 ## 9. DevOps already in the project
@@ -2660,6 +2933,8 @@ These are real, and they make better interview stories than any feature list.
 
 **7. Request IDs that went missing.** Log lines formatted after the request had finished lost their request ID, because it was read at formatting time. **Fix:** stamp it on each record when it's created. The lesson: **capture context when the event happens, not when you print it.**
 
+**8. A check that failed because the app got busier (Phase 12).** The CI step `docker compose logs notifier | grep -q "notifier started"` had passed for months. Then the Phase 12 seed started making real orders, so the notifier logged about 150 more lines, and the step failed with exit code 255 even though the line was there. `grep -q` stops reading at the first match. `docker compose logs` then writes into a closed pipe and fails, and `set -o pipefail` reports the failure of any command in the pipeline. With short logs, everything fit in the pipe's buffer before grep exited, so the bug stayed hidden. Even on this branch it passed once and failed twice, depending on how many notifications had been sent by the time the step ran: a timing-dependent failure that looked like a flaky CI run until it was read properly. You can see it in one line: `set -o pipefail; seq 1 200000 | grep -q "^1$"` exits with 141. **Fix:** write the logs to a file, then grep the file. The lesson: **a check can depend on the size of its input. Watch for `| grep -q` and `| head` under pipefail.**
+
 ---
 
 ## 12. Project structure and API
@@ -2687,7 +2962,9 @@ quickserve/
 │       ├── auth/                 login, logout, get_current_user, require_roles,
 │       │                         rate_limit (Redis), revocation (Redis)
 │       ├── users/                model (4 roles), schema, service, router
-│       ├── restaurants/
+│       ├── restaurants/          model (location, cuisines, prep time, rating totals), profile + location updates
+│       ├── discovery/            near me (bounding box + exact distance), ETA and Bayesian rating (pure), search (Phase 12)
+│       ├── reviews/              one review per delivered order, atomic rating totals, recount job (Phase 12)
 │       ├── menu/                 model (MenuItem, InventoryCycle), repository, service, cache,
 │       │                         analytics (ORM + raw SQL versions), schema, router
 │       ├── orders/               model, state_machine, repository, service (quote + place), schema, router
@@ -2703,7 +2980,7 @@ quickserve/
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        204 tests, real PostgreSQL and Redis
+├── tests/                        244 tests, real PostgreSQL and Redis
 ├── infra/                        Terraform for AWS (Phase 6); start with infra/README.md
 │   ├── k8s/                      Kubernetes (Phase 7): base/ manifests, overlays/ (lite = Mac default, local = full,
 │   │                             ci, ci-lite), components/lite, deploy.sh,
@@ -2738,6 +3015,10 @@ quickserve/
 | POST | `/users` | anyone | Sign up as customer, restaurant owner or rider |
 | GET | `/users/me` | logged in | Who am I? |
 | GET | `/restaurants` | anyone | List restaurants (paginated) |
+| GET | `/restaurants/near?lat=&lng=&sort=` | anyone | Restaurants that deliver here, with distance, ETA, fee and rating; sort by `distance`, `rating` or `eta`; `cuisine`, `min_rating` filters |
+| GET | `/search?q=&lat=&lng=` | anyone | Dishes and restaurants that deliver here; typo-tolerant |
+| PUT | `/restaurants/{id}/profile` | owner | Cuisines and usual prep time |
+| GET | `/restaurants/{id}/reviews` | anyone | Rating, star breakdown, newest reviews |
 | POST | `/restaurants` | restaurant owner | Create a restaurant you own |
 | GET | `/restaurants/{id}/menu` | anyone | Customer menu with `orderable`, badge, units left; cached (`X-Cache` header) |
 | POST | `/restaurants/{id}/menu` | owner | Add a dish (opens stock cycle 1) |
@@ -2754,6 +3035,8 @@ quickserve/
 | POST | `/orders/{id}/payments` | its customer | Mock payment; needs `Idempotency-Key`; `?simulate=failure` to test failures |
 | GET | `/orders/{id}/payments`, `/payments/{id}` | same as the order | Payment attempts |
 | POST | `/admin/jobs/order-timeouts` | admin | Run the timeout job by hand |
+| POST | `/orders/{id}/review` | its customer, once, within 7 days of delivery | Rate a delivered order 1-5 stars |
+| POST | `/admin/jobs/recompute-ratings` | admin | Recount rating totals from the reviews; reports drift |
 | GET | `/notifications?unread_only=true` | logged in | Your notifications, newest first |
 | POST | `/notifications/{id}/read` | the notification's owner | Mark one as read (someone else's: `404`) |
 | GET | `/health`, `/health/ready` | anyone | Liveness, readiness |
@@ -2778,8 +3061,8 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **9. HTTPS front door** (done) | Gateway API with Envoy Gateway: one Gateway for every hostname, HTTP→HTTPS redirect, TLS from a local CA with automatic renewal (cert-manager), HSTS, timeouts, an edge rate limit on login, request IDs end to end; the API trusts exactly one proxy hop for the client IP; CI tests it all from outside the cluster | Gateway API vs Ingress, TLS termination, certificate chains, X-Forwarded-For spoofing, layered rate limiting |
 | **10. Network policies** (done) | Default deny in and out, DNS allowed, one allow-list per component (PostgreSQL only from the apps, Redis only from the API, the API only from the gateway, no internet for the apps); smoke tests in their own labelled pods; a check that makes real allowed and forbidden connections, with positive controls, in CI on every PR | Zero trust inside the cluster, least privilege, egress control, namespaceSelector + podSelector, proving enforcement |
 | **11. Pricing** (done) | Distance-based delivery fee (haversine x detour index, slabs, radius), free delivery for big orders nearby, small order fee, peak / late-night / rain surge (rain is an admin switch that expires), coupons (percent with cap, flat, minimums, first order, per-customer and total limits, platform- or restaurant-funded) with race-safe redemption, GST after discount, `POST /orders/quote` and `expected_total` | Pure functions for business rules, atomic counters and row locks, CHECK constraints as a safety net, time zones, price-change protection |
-| **12. Discovery** (next) | "Restaurants near me" within each one's delivery radius, sorted by distance, rating or delivery time; dish search; ratings and reviews only after a delivered order, with averages kept up to date | Geo queries in PostgreSQL, indexes and `EXPLAIN`, full-text search, keeping summary numbers in step |
-| **13. Frontend: customer app** | React + TypeScript (Vite): browse, search, menu, cart, the checkout bill from `/orders/quote`, pay, live order status and notifications; served through the HTTPS gateway | API client generated from OpenAPI, tokens in the browser, same origin for site and API |
+| **12. Discovery** (done) | Restaurants near me (bounding box on an index, then the exact distance checkout uses), delivery time from Swiggy's max(first mile, prep) + last mile, sort by distance / time / Bayesian-average rating, cuisine and rating filters; dish and restaurant search with full-text, trigram and typo fallback; reviews only for delivered orders, once, with atomic running totals, a CHECK constraint and a recount job | Bounding boxes and B-trees, `EXPLAIN`, GIN indexes, generated columns, Bayesian averages, denormalised counters and reconciliation, lost updates |
+| **13. Frontend: customer app** (next) | React + TypeScript (Vite): browse, search, menu, cart, the checkout bill from `/orders/quote`, pay, live order status and notifications; served through the HTTPS gateway | API client generated from OpenAPI, tokens in the browser, same origin for site and API |
 | **14. Frontend: restaurant and rider screens** | Owner dashboard (incoming orders, accept/prepare, menu and stock, coupons, today's sales); rider view (assigned orders, pick up, deliver) | Role-based UI on top of the backend's role checks |
 | **15. Tracing** | OpenTelemetry traces across browser, Envoy, API, SQL, outbox and notifier, viewed in Jaeger; N+1 detection; sampling | Distributed tracing, context propagation through the outbox, the cost of tracing |
 | **16. Live on AWS** | Apply the Phase 6 Terraform, a real domain with a Let's Encrypt certificate, GitHub Actions deploying after each merge, a smoke test against the live URL, then `terraform destroy` | Continuous delivery, real cloud costs, why one server instead of EKS |
@@ -2849,6 +3132,16 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 **How do you stop alert fatigue?** Alert on symptoms customers feel, add a `for:` duration, group related alerts into one notification, inhibit symptoms while their cause is firing, repeat slowly, and silence (don't delete) alerts during maintenance. Plus a Watchdog, an always-firing alert, so a broken alerting pipeline is noticed.
 
 **How do you rightsize a pod?** Measure real usage over a representative period (a week with peak hours). Set the CPU request from a high percentile, because CPU is compressible (throttled, not killed), and the memory request from the peak, because a pod over its memory limit is OOMKilled. Add headroom, change one service at a time, and watch latency and restarts. VPA in recommendation mode automates the measuring.
+
+**How do you find restaurants within 6 km fast?** Don't compute the distance for every row. Cut a latitude/longitude rectangle around the customer that's guaranteed to contain the circle, let a B-tree index answer the `BETWEEN` ranges, then compute the exact distance only for rows inside it. On 100,000 rows that was 0.44 ms vs 136 ms. At scale, use a 2-D index (PostGIS GiST) or a grid of cells (geohash, H3).
+
+**Why not sort by average rating?** One 5-star review would beat 400 reviews averaging 4.6. Use a Bayesian average: add C imaginary reviews at the platform's mean, so the score starts at the mean and moves to the item's own average as real reviews arrive (IMDb's Top 250 formula). Show the plain average, rank by the Bayesian score.
+
+**You keep a count and a sum on the parent row. How do you keep them right?** Change them with one atomic UPDATE (`count = count + 1`), in the same transaction as the child row, with a CHECK constraint for impossible values, and a reconciliation job that recounts from the source and reports drift. That job must lock before counting, or it can overwrite a concurrent update with a stale count.
+
+**Full-text search, LIKE or trigrams?** Full-text (`tsvector` + GIN) for words with stemming and ranking. Trigram GIN for `ILIKE '%x%'` and typos. Run typo matching only when the exact search finds nothing, because similarity also matches look-alikes ("chai" ~ "Butter Chicken"). Track zero-result searches.
+
+**Why didn't PostgreSQL use my index?** On a small table a sequential scan is cheaper, and the planner is right. With other filters, another index may narrow more. Check with `EXPLAIN (ANALYZE)` on realistic data and statistics (`ANALYZE`), not on 10 demo rows.
 
 **What's unit economics in FinOps?** Cost per unit of business value. For us: infrastructure cost per completed order, tracked as orders grow.
 
@@ -2945,3 +3238,11 @@ Business and tax figures change often; the dates show when each was reported.
 85. MapAtlas, *As the crow flies vs by road* (116 city pairs, September 2026: roads 23.5% longer at the median; multiply by 1.2 as a rule of thumb; cites Ballou, Rahardja and Sakai, *Selected country circuity factors for road travel distance estimation*, Transportation Research Part A, 2002). https://mapatlas.eu/blog/distance-as-the-crow-flies
 86. EY India, *CBIC issues notifications giving effect to the recommendations made by the GST Council* (e-commerce operators pay 18% on local delivery from 22 September 2025; Notification 17/2025-Central Tax (Rate)). https://www.ey.com/en_in/technical/alerts-hub/2025/09/cbic-issues-notifications-giving-effect-to-the-recommendations-made
 87. TaxGuru, *Section 15(3) of the CGST Act* (a discount given before or at the time of supply and recorded in the invoice is not part of the value of supply). https://taxguru.in/?p=823177
+88. Jan Philip Matuschek, *Finding Points Within a Distance of a Latitude/Longitude Using Bounding Coordinates* (the bounding-box formulas, including poles and the 180th meridian, and why a B-tree on latitude and longitude only narrows by one of them). http://janmatuschek.de/LatitudeLongitudeBoundingCoordinates
+89. Swiggy Bytes, *The Swiggy Delivery Challenge* (series, 2019 onwards; Part One gives "Delivery Time = Max(Assignment Delay + First Mile Time, Prep Time) + Last Mile Time" and the "last last mile" from the gate to the door). https://bytes.swiggy.com/the-swiggy-delivery-challenge-part-two-f095930816e3
+90. Evan Miller, *How Not To Sort By Average Rating* (2009). https://www.evanmiller.org/how-not-to-sort-by-average-rating.html
+91. Evan Miller, *Bayesian Average Ratings* (2012). https://www.evanmiller.org/bayesian-average-ratings.html
+92. IMDb's Top 250 "true Bayesian estimate", WR = (v ÷ (v+m)) × R + (m ÷ (v+m)) × C, as published by IMDb and collected by FXSolver. https://www.fxsolver.com/browse/formulas/Bayes+estimator
+93. Evan Miller, *Ranking Items With Star Ratings* (2014; ranking by the lower bound of a credible interval). https://www.evanmiller.org/ranking-items-with-star-ratings.html
+94. PostgreSQL 16 documentation, *12.2 Tables and Indexes* (a stored generated `tsvector` column with a GIN index). https://www.postgresql.org/docs/16/textsearch-tables.html
+95. PostgreSQL 16 documentation, *pg_trgm* (`word_similarity`, the `<%` operator and `pg_trgm.word_similarity_threshold`, default 0.6; GIN `gin_trgm_ops` also serves `LIKE`/`ILIKE`; a trusted extension). https://www.postgresql.org/docs/16/pgtrgm.html

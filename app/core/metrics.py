@@ -63,6 +63,10 @@ COUPON_DISCOUNT = Counter(
     "quickserve_coupon_discount_rupees_total", "Coupon discount given on placed orders, by who pays", ["funded_by"]
 )
 SURGE_ORDERS = Counter("quickserve_surge_orders_total", "Orders that paid a surge fee, by reason", ["reason"])
+# Discovery (Phase 12). "Searches that found nothing" is the number search teams
+# watch most: each one is a customer who wanted something and didn't find it.
+SEARCHES = Counter("quickserve_searches_total", "Searches, by how they matched (exact, fuzzy, none)", ["outcome"])
+REVIEWS = Counter("quickserve_reviews_total", "Reviews posted (committed), by stars", ["stars"])
 PAYMENTS = Counter("quickserve_payments_total", "Payment attempts recorded, by outcome", ["outcome"])
 MENU_CACHE = Counter("quickserve_menu_cache_requests_total", "Customer menu reads, by cache result", ["result"])
 LOGINS = Counter("quickserve_logins_total", "Login attempts, by outcome", ["outcome"])

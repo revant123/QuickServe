@@ -5,6 +5,7 @@ Safe to run twice: it skips the demo data if it already exists.
 """
 
 from decimal import Decimal
+from itertools import cycle
 
 from sqlalchemy import select
 
@@ -12,10 +13,19 @@ import app.database.models  # noqa: F401
 from app.core.security import hash_password
 from app.database.session import SessionLocal
 from app.modules.coupons.model import Coupon, CouponFunder
+from app.modules.menu.model import MenuItem
 from app.modules.menu.schema import MenuItemCreate
 from app.modules.menu.service import create_menu_item
+from app.modules.orders.model import OrderStatus
+from app.modules.orders.schema import GeoPoint, OrderCreate, OrderLineIn
+from app.modules.orders.service import change_status, place_order
+from app.modules.payments.schema import SimulatedOutcome
+from app.modules.payments.service import pay
 from app.modules.pricing.calculator import CouponKind
 from app.modules.restaurants.model import Restaurant
+from app.modules.reviews.model import Review
+from app.modules.reviews.schema import ReviewCreate
+from app.modules.reviews.service import create_review
 from app.modules.users.model import Role, User
 
 # Demo logins for local development only. Never reuse these passwords anywhere real.
@@ -72,6 +82,148 @@ MENUS = {
 }
 
 
+# ---------- Phase 12: discovery ----------
+# Cuisines and usual prep time for every demo restaurant (minutes).
+PROFILES = {
+    "Pal Dhaba": ("North Indian, Punjabi", 25),
+    "Sindhi Sweets": ("Sweets, Street Food", 12),
+    "Dosa Junction": ("South Indian", 15),
+    "Momo Point": ("Tibetan, Chinese", 18),
+}
+# Two more (fictional) restaurants, so "near me" has something to sort. Momo
+# Point is in Mohali: too far for Sector 17 (about 8.6 km by road), so it shows
+# up only for customers near it. Try both points in GET /restaurants/near.
+NEW_RESTAURANTS = {
+    ("Dosa Junction", "Sector 35-C, Chandigarh", "10.00", (Decimal("30.723000"), Decimal("76.759500"))): [
+        ("Masala Dosa", "With sambar and coconut chutney", "150.00", True, 60),
+        ("Idli Sambar", "Two steamed rice cakes", "90.00", True, 60),
+        ("Filter Coffee", "", "60.00", True, None),
+    ],
+    ("Momo Point", "Phase 7, Mohali", "10.00", (Decimal("30.709000"), Decimal("76.719000"))): [
+        ("Veg Steamed Momos", "Eight pieces, with red chutney", "120.00", True, 80),
+        ("Chicken Momos", "Eight pieces", "160.00", False, 80),
+        ("Thukpa", "Tibetan noodle soup", "180.00", True, 30),
+    ],
+}
+# Demo reviews: (stars, comment). Dosa Junction has a single 5-star review: it
+# shows as "New", and sorting by rating still puts Pal Dhaba (4.6 from 10
+# reviews) above it. That's the Bayesian average at work (see the README).
+DEMO_REVIEWS = {
+    "Pal Dhaba": [
+        (5, "Dal makhani was rich and creamy"),
+        (4, "Good naan, arrived warm"),
+        (5, ""),
+        (4, ""),
+        (5, "Butter chicken as it should be"),
+        (5, ""),
+        (4, "Slightly late, food was great"),
+        (5, ""),
+        (5, ""),
+        (4, ""),
+    ],
+    "Sindhi Sweets": [(4, "Fresh samosas"), (4, ""), (5, "Best chole bhature around"), (3, "A bit late")],
+    "Dosa Junction": [(5, "Crisp dosa")],
+    "Momo Point": [(4, "Spicy chutney, nice"), (3, ""), (4, "")],
+}
+REVIEWER_NAMES = ["Aman Gill", "Priya Sharma", "Rohit Verma", "Simran Kaur", "Karan Mehta"]
+
+
+def reviewers(db) -> list[User]:
+    """Demo customers who write the demo reviews, so the main demo customer's
+    first order (and WELCOME50) stays unused."""
+    found = []
+    for i, name in enumerate(REVIEWER_NAMES, start=1):
+        email = f"reviewer{i}@quickserve.dev"
+        user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        if user is None:
+            user = User(name=name, email=email, role=Role.CUSTOMER, password_hash=hash_password(f"reviewer-pass-{i}"))
+            db.add(user)
+            db.commit()
+        found.append(user)
+    return found
+
+
+def deliver_and_review(db, restaurant: Restaurant, reviewer: User, owner: User, rider: User, rating, comment):
+    """A real order, through the real code: place, pay, cook, deliver, review.
+    Demo data made this way can't break rules the API enforces."""
+    item = (
+        db.execute(select(MenuItem).where(MenuItem.restaurant_id == restaurant.id).order_by(MenuItem.price.desc()))
+        .scalars()
+        .first()
+    )
+    here = GeoPoint(lat=float(restaurant.latitude) + 0.004, lng=float(restaurant.longitude))
+    order = place_order(
+        db,
+        OrderCreate(
+            restaurant_id=restaurant.id,
+            delivery_address="Demo address",
+            delivery_location=here,
+            items=[OrderLineIn(menu_item_id=item.id, quantity=1)],
+        ),
+        reviewer,
+    )
+    pay(db, order.id, f"seed-{order.id}", SimulatedOutcome.success, reviewer)
+    for status, actor in [
+        (OrderStatus.ACCEPTED, owner),
+        (OrderStatus.PREPARING, owner),
+        (OrderStatus.READY, owner),
+        (OrderStatus.OUT_FOR_DELIVERY, rider),
+        (OrderStatus.DELIVERED, rider),
+    ]:
+        change_status(db, order.id, status, actor)
+    create_review(db, order.id, ReviewCreate(rating=rating, comment=comment), reviewer)
+
+
+def add_phase12_data(db) -> None:
+    """Cuisines, two more restaurants, and demo reviews. Safe to run again."""
+    owner = db.execute(select(User).where(User.email == "owner@quickserve.dev")).scalar_one()
+    rider = db.execute(select(User).where(User.email == "rider@quickserve.dev")).scalar_one()
+    for (name, address, packaging, (lat, lng)), items in NEW_RESTAURANTS.items():
+        if db.execute(select(Restaurant).where(Restaurant.name == name)).scalar_one_or_none() is None:
+            r = Restaurant(
+                owner_id=owner.id,
+                name=name,
+                address=address,
+                packaging_charge=Decimal(packaging),
+                latitude=lat,
+                longitude=lng,
+            )
+            db.add(r)
+            db.commit()
+            for item_name, description, price, veg, stock in items:
+                data = MenuItemCreate(
+                    name=item_name,
+                    description=description,
+                    price=Decimal(price),
+                    is_veg=veg,
+                    track_stock=stock is not None,
+                    stock=stock,
+                )
+                create_menu_item(db, r.id, data, owner)
+            print(f"Added demo restaurant {name}")
+    for name, (cuisines, prep) in PROFILES.items():
+        r = db.execute(select(Restaurant).where(Restaurant.name == name)).scalar_one_or_none()
+        if r is not None and not r.cuisines:
+            r.cuisines, r.avg_prep_minutes = cuisines, prep
+    db.commit()
+
+    people = reviewers(db)
+    if db.execute(select(Review.id).where(Review.customer_id.in_([p.id for p in people]))).first() is None:
+        for name, reviews in DEMO_REVIEWS.items():
+            r = db.execute(select(Restaurant).where(Restaurant.name == name)).scalar_one()
+            # One review per order; a reviewer can have several orders.
+            for (rating, comment), reviewer in zip(reviews, cycle(people)):
+                deliver_and_review(db, r, reviewer, owner, rider, rating, comment)
+        print("Added demo reviews (through real orders)")
+
+
+def print_discovery_examples() -> None:
+    print("\nTry discovery (Phase 12) in Swagger or the browser:")
+    print("  GET /api/v1/restaurants/near?lat=30.7333&lng=76.7794&sort=rating   (Sector 22, Chandigarh)")
+    print("  GET /api/v1/restaurants/near?lat=30.7046&lng=76.7179               (Mohali: Momo Point appears)")
+    print("  GET /api/v1/search?q=paner&lat=30.7333&lng=76.7794                 (a typo on purpose)")
+
+
 def print_logins() -> None:
     print("\nDemo logins. In Swagger click 'Authorize' and put the email in the 'username' box:")
     for email, (_name, role, password) in DEMO_USERS.items():
@@ -103,7 +255,9 @@ def main() -> None:
                     print(f"Added missing demo account: {email}")
             db.commit()
             add_phase11_data(db)
+            add_phase12_data(db)
             print("Demo restaurants already loaded.")
+            print_discovery_examples()
             print_logins()
             return
 
@@ -135,6 +289,8 @@ def main() -> None:
                 item = create_menu_item(db, r.id, data, owner)
                 print(f"  {item_name:<16} menu_item_id {item.id}  stock={stock}")
         add_phase11_data(db)
+        add_phase12_data(db)
+        print_discovery_examples()
         print_logins()
 
 
