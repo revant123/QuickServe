@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     notifier_max_attempts: int = 5  # then the event is dead-lettered for a human to look at
     outbox_retention_days: int = 7  # delivered events are deleted after this
 
+    # Behind a proxy (Phase 9): addresses of OUR reverse proxy (the gateway),
+    # comma-separated, as IPs or networks. Only requests coming from these may
+    # tell us the client's address in X-Forwarded-For. Empty = no proxy: the
+    # TCP peer is the client. See app/core/client_ip.py.
+    trusted_proxy_cidrs: str = ""
+
     # Logging: JSON lines (for log tools) or plain text (easier to read while coding).
     log_level: str = "INFO"
     log_json: bool = True

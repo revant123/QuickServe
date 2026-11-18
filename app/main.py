@@ -9,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 import app.database.models  # noqa: F401  (registers every model with SQLAlchemy)
 from app.api.router import api_router
+from app.core.client_ip import client_ip
 from app.core.config import get_settings
 from app.core.exceptions import DomainError, TooManyRequests
 from app.core.logging import configure_logging, log_event, new_request_id, request_id_var
@@ -70,6 +71,7 @@ async def request_context(request: Request, call_next):
         method=request.method,
         path=request.url.path,  # path only: query strings can contain personal data
         status=response.status_code,
+        client_ip=client_ip(request),  # the real client, also behind the gateway
         duration_ms=duration_ms,
     )
     request_id_var.reset(token)

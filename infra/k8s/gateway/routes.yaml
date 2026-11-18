@@ -1,0 +1,72 @@
+# Routes: which requests go where. Matching is by hostname first, then path.
+#
+# 1. Anything on plain HTTP gets a permanent redirect to HTTPS.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: https-redirect
+spec:
+  parentRefs:
+    - name: quickserve
+      sectionName: http
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+---
+# 2. The API, on its own hostname.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api
+spec:
+  parentRefs:
+    - name: quickserve
+      sectionName: https
+  hostnames:
+    - quickserve.localhost
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        # The same Service the pods already had. Only port 80 (the app) is in
+        # it; the metrics port isn't, so /metrics can't be reached from outside.
+        - name: api
+          port: 80
+      # A request that takes longer than this gets a 504 from Envoy instead of
+      # holding a connection open forever.
+      timeouts:
+        request: 15s
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              # HSTS: "only ever talk to me over HTTPS". Browsers remember it
+              # for max-age seconds. 5 minutes while learning; a real site uses
+              # a year (31536000) once it's sure HTTPS works everywhere.
+              - name: Strict-Transport-Security
+                value: max-age=300
+              - name: X-Content-Type-Options
+                value: nosniff
+---
+# 3. Grafana on another hostname, same Gateway, same IP, same certificate.
+# Host-based routing: the browser sends the hostname (in TLS's SNI and in the
+# Host header), and Envoy picks the route by it.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grafana
+spec:
+  parentRefs:
+    - name: quickserve
+      sectionName: https
+  hostnames:
+    - grafana.quickserve.localhost
+  rules:
+    - backendRefs:
+        - name: grafana
+          port: 3000

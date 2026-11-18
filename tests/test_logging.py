@@ -33,6 +33,7 @@ def test_one_json_line_per_request_with_timing(client, caplog):
     line = lines[0]
     assert line["request_id"] == "trace-me-123" and line["path"] == "/health" and line["status"] == 200
     assert isinstance(line["duration_ms"], float) and line["level"] == "INFO"
+    assert line["client_ip"] == "testclient"  # what Starlette's test client calls itself
 
 
 def test_failed_login_never_logs_the_password_or_email(client, customer, caplog):

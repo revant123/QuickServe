@@ -248,7 +248,7 @@ jobs:
   # when the job ends. Same manifests as minikube on your Mac.
   kubernetes:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       KIND_VERSION: v0.33.0
       NS: quickserve
@@ -259,8 +259,11 @@ jobs:
       - name: Validate the manifests against the Kubernetes schema
         run: |
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          # Gateway API, Envoy Gateway and cert-manager objects have no built-in
+          # schema here (they're CRDs): they are skipped, and the API server
+          # validates them against the installed CRDs when deploy.sh applies them.
           for overlay in local ci; do
-            kubectl kustomize "infra/k8s/overlays/$overlay" | ./kubeconform -strict -summary -
+            kubectl kustomize "infra/k8s/overlays/$overlay" | ./kubeconform -strict -ignore-missing-schemas -summary -
           done
 
       - name: Check the Prometheus and Alertmanager configs, unit-test the rules
@@ -282,7 +285,7 @@ jobs:
           kind create cluster --name quickserve --wait 120s
           kind load docker-image quickserve:ci --name quickserve
 
-      - name: Deploy (database, Redis, migration Job, API, worker)
+      - name: Deploy (add-ons, database, Redis, migration Job, apps, monitoring, gateway)
         run: infra/k8s/deploy.sh infra/k8s/overlays/ci
 
       - name: Smoke test from inside the cluster
@@ -324,6 +327,9 @@ jobs:
           done
           exit 1
 
+      - name: Front door - HTTPS, redirects, host routing, real client IP, edge rate limit
+        run: infra/k8s/gateway_check.sh
+
       - name: Show the cluster if something failed
         if: failure()
         run: |
@@ -331,3 +337,8 @@ jobs:
           kubectl -n $NS describe pods || true
           for d in api worker notifier prometheus grafana alertmanager mailpit; do kubectl -n $NS logs deploy/$d --all-containers --tail=100 || true; done
           kubectl -n $NS logs job/migrate --tail=100 || true
+          kubectl -n $NS describe gateway,httproute,certificate,backendtrafficpolicy,clienttrafficpolicy || true
+          kubectl -n envoy-gateway-system get all || true
+          kubectl -n envoy-gateway-system logs deploy/envoy-gateway --tail=100 || true
+          kubectl -n envoy-gateway-system logs deploy/quickserve-gateway --all-containers --tail=100 || true
+          kubectl -n cert-manager logs deploy/cert-manager --tail=100 || true
