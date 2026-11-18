@@ -57,3 +57,26 @@ class OutOfStock(Conflict):
 
 class InvalidTransition(Conflict):
     """Raised when an order is moved to a status its current status does not allow."""
+
+
+class Unprocessable(DomainError):
+    """422: the request is well-formed, but we can't do what it asks."""
+
+    status_code = 422
+
+
+class NotServiceable(Unprocessable):
+    """The delivery address is outside the restaurant's delivery area."""
+
+
+class CouponRejected(Unprocessable):
+    """The coupon exists (or not) but can't be used on this order. The message says why."""
+
+
+class PriceChanged(Conflict):
+    """The price moved between the quote the customer saw and the order (surge started,
+    a coupon ran out). The customer must see the new price before paying it."""
+
+    def __init__(self, message: str, new_total):
+        super().__init__(message)
+        self.extra = {"new_grand_total": str(new_total)}

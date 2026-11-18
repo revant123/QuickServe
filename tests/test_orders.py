@@ -28,13 +28,16 @@ def _paid_order(db, customer, restaurant, *lines):
 def test_bill_below_free_delivery(db, restaurant, customer, make_item):
     item = make_item(price="125.00", stock=10)
     order = place_order(db, order_payload(restaurant, (item, 2)), customer)
-    # items 250 + packaging 20 + delivery 30 + platform 12
-    # GST food 5% of 270 = 13.50 ; GST fees 18% of 42 = 7.56
+    # 1.0 km away (0.8 km straight line x 1.25), so the 0-2 km delivery slab.
+    # items 250 + packaging 20 + delivery 20 + platform 14.90
+    # GST food 5% of 270 = 13.50 ; GST fees 18% of 34.90 = 6.28
+    assert order.distance_km == Decimal("1.0")
     assert order.item_total == Decimal("250.00")
-    assert order.delivery_fee == Decimal("30.00")
+    assert order.delivery_fee == Decimal("20.00")
+    assert order.small_order_fee == order.surge_fee == order.discount == Decimal("0.00")
     assert order.gst_food == Decimal("13.50")
-    assert order.gst_fees == Decimal("7.56")
-    assert order.grand_total == Decimal("333.06")
+    assert order.gst_fees == Decimal("6.28")
+    assert order.grand_total == Decimal("324.68")
     assert order.items[0].unit_price == Decimal("125.00")
 
 

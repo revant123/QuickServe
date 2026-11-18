@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, GitHub Actions. **147 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, GitHub Actions. **204 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
 
 ---
 
@@ -34,6 +34,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
    - [Alert emails and rightsizing (Phase 8b: FinOps)](#alert-emails-and-rightsizing-phase-8b-finops)
    - [HTTPS front door: Gateway API (Phase 9)](#https-front-door-gateway-api-phase-9)
    - [Network policies (Phase 10)](#network-policies-phase-10)
+   - [Pricing like Zomato and Swiggy (Phase 11)](#pricing-like-zomato-and-swiggy-phase-11)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -127,7 +128,7 @@ python -m app.worker                # terminal 2 (venv active): runs the order t
 |---|---|
 | http://127.0.0.1:8000/health/ready | `{"status":"ready","database":"ok","redis":"ok"}` |
 | http://127.0.0.1:8000/docs | Swagger UI with every endpoint |
-| `pytest -q` (in another terminal, venv active) | `147 passed` |
+| `pytest -q` (in another terminal, venv active) | `204 passed` |
 
 ### Step 9: Place your first order in Swagger
 
@@ -230,12 +231,13 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 |---|---|
 | Focus on how the ORM compares with writing SQL by hand | [Section 5](#5-orm-vs-writing-sql-by-hand); `app/modules/menu/analytics.py` (same report in ORM and raw SQL, tested equal); `scripts/show_sql.py`; `scripts/race_demo.py`; `tests/test_orm_behaviour.py` |
 | DevOps and FinOps as the top priority | [Section 9](#9-devops-already-in-the-project) and [Section 10](#10-finops-thinking-in-cost-per-order); `.github/workflows/ci.yml`; `docker-compose.yml`; health checks; connection pool settings; lock file |
-| Real business logic from Zomato / Swiggy | [Section 6](#6-business-rules-borrowed-from-zomato-and-swiggy): accept timeout, out-of-stock-until, itemised bill with platform fee and GST, cancellation rules, idempotent payments |
+| Real business logic from Zomato / Swiggy | [Section 6](#6-business-rules-borrowed-from-zomato-and-swiggy): accept timeout, out-of-stock-until, itemised bill with platform fee and GST, cancellation rules, idempotent payments. [Phase 11](#pricing-like-zomato-and-swiggy-phase-11): distance-based delivery fee, free delivery rules, small order fee, peak/late-night/rain surge, coupons with race-safe limits, quotes with price-change protection |
 | Stock + consumer logic instead of QuickKart's `stock - 1` | [Section 4](#4-the-inventory-design-stock-consumed-and-cycles); `app/modules/menu/model.py` |
 | Restock resets the consumer counter to zero | `restock()` in `app/modules/menu/service.py`, which archives the cycle first so no data is lost |
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| Pricing, coupons and surge (Phase 11) | [Pricing Q&A](#pricing-like-zomato-and-swiggy-phase-11); `app/modules/pricing/` (calculator, geo, rain switch), `app/modules/coupons/`, `POST /orders/quote`, `tests/test_pricing.py`, `tests/test_checkout.py` |
 | Network policies (Phase 10) | [Network policy Q&A](#network-policies-phase-10); `infra/k8s/network-policies/`, `infra/k8s/netpol_check.sh`, `infra/k8s/smoke.sh` |
 | HTTPS front door (Phase 9) | [Gateway Q&A](#https-front-door-gateway-api-phase-9); `infra/k8s/gateway/` (certificates, Gateway, routes, policies), `infra/k8s/addons.sh`, `infra/k8s/gateway_check.sh`, `app/core/client_ip.py`, `tests/test_client_ip.py` |
 | Alert emails and rightsizing (Phase 8b: FinOps) | [Phase 8b Q&A](#alert-emails-and-rightsizing-phase-8b-finops); `infra/k8s/monitoring/alertmanager.yml` + `alertmanager.yaml` (Alertmanager, Mailpit), the Watchdog and rightsizing rules in `rules.yml`, `infra/k8s/rightsizing.py`, `tests/test_rightsizing.py` |
@@ -344,6 +346,9 @@ erDiagram
     ORDERS ||--|{ ORDER_ITEMS : contains
     ORDERS ||--o{ ORDER_STATUS_EVENTS : "timeline"
     ORDERS ||--o{ PAYMENTS : "attempts"
+    COUPONS ||--o{ COUPON_REDEMPTIONS : "used in"
+    ORDERS ||--o| COUPON_REDEMPTIONS : "discounted by"
+    RESTAURANTS ||--o{ COUPONS : "funds (optional)"
 
     USERS {
         uuid id PK
@@ -356,6 +361,9 @@ erDiagram
         uuid owner_id FK
         numeric packaging_charge
         bool is_open
+        numeric latitude
+        numeric longitude
+        numeric delivery_radius_km
     }
     MENU_ITEMS {
         uuid id PK
@@ -387,6 +395,10 @@ erDiagram
         uuid customer_id FK
         uuid restaurant_id FK
         enum status
+        numeric distance_km
+        numeric delivery_fee
+        numeric surge_fee
+        numeric discount
         numeric grand_total
         timestamptz pay_by
         timestamptz accept_by
@@ -412,7 +424,25 @@ erDiagram
         enum to_status
         string actor
     }
+    COUPONS {
+        uuid id PK
+        string code UK
+        enum kind
+        numeric value
+        uuid restaurant_id FK
+        enum funded_by
+        int max_uses_total
+        int times_used
+    }
+    COUPON_REDEMPTIONS {
+        uuid id PK
+        uuid coupon_id FK
+        uuid order_id FK, UK
+        enum status
+    }
 ```
+
+The orders table shows only some of its bill columns; every line of the bill is stored. `surge_flags` (the rain switch, Phase 11) and the outbox tables (Phase 8) aren't drawn.
 
 Rules the **database itself** enforces, so a bug in Python can't break them:
 
@@ -424,6 +454,8 @@ Rules the **database itself** enforces, so a bug in Python can't break them:
 | `uq_payments_idempotency_key` | A retried payment can't create a second charge |
 | `uq_users_email` | No duplicate accounts, even with simultaneous sign-ups |
 | `ck_order_items_quantity_positive`, `ck_menu_items_price_positive` | No zero/negative quantities or prices |
+| `ck_coupons_uses_within_limit` | A coupon can never be recorded as used more times than its limit, even under a race or a bug (Phase 11) |
+| `uq_coupon_redemptions_order_id` | At most one coupon per order; a retried request can't apply it twice |
 
 ### 3.4 What happens when a customer places and pays for an order
 
@@ -505,7 +537,7 @@ flowchart LR
         pg["Start PostgreSQL 16 and Redis 7 service containers"] --> inst["pip install -r requirements-dev.lock"]
         inst --> lint["ruff check and ruff format --check"]
         lint --> mig["alembic upgrade head and alembic check"]
-        mig --> pyt["pytest: 147 tests"]
+        mig --> pyt["pytest: 204 tests"]
     end
 
     subgraph docker["job: docker"]
@@ -828,24 +860,26 @@ The rule is a hybrid method, so the menu page and the order UPDATE apply exactly
 
 ### Q: How is the bill calculated?
 
-Like the itemised bills on delivery apps:
+Like the itemised bills on delivery apps. An order of Rs 250, 1 km away, at lunchtime:
 
 ```
 item total            250.00     sum of unit price x quantity (2 x Rs 125)
 packaging charge       20.00     set by the restaurant
-delivery fee           30.00     waived above Rs 299
-platform fee           12.00     flat, per order
+delivery fee           20.00     1.0 km: the 0-2 km slab
+platform fee           14.90     flat, per order
 GST on food (5%)       13.50     on items + packaging
-GST on fees (18%)       7.56     on delivery + platform fee
+GST on fees (18%)       6.28     on delivery + platform fee
 -------------------------------
-grand total           333.06
+grand total           324.68
 ```
 
-Where the rules come from:
+Since Phase 11, the bill can also have a coupon discount, a small order fee and surge fees (peak, late night, rain), and the delivery fee depends on the distance. See [Pricing like Zomato and Swiggy](#pricing-like-zomato-and-swiggy-phase-11) for every rule and where it comes from.
+
+Where the base rules come from:
 
 - **Platform fee.** A fixed per-order charge. In March 2026 Zomato raised it to Rs 14.90 before GST [10], and Swiggy raised its fee to Rs 17.58 including GST [11]. Both platforms change it often.
 - **GST on food.** For orders through delivery apps, the e-commerce operator collects and deposits GST on the restaurant service under Section 9(5), at 5% without input tax credit [12].
-- **GST on the platform's own fees.** Delivery charges billed by the operator, and platform fees, are a separate supply taxed at 18% [13]. Tax treatment of delivery keeps changing: a notification making operators liable for certain delivery services under Section 9(5) took effect on 1 November 2026 [14].
+- **GST on the platform's own fees.** Delivery charges billed by the operator, and platform fees, are a separate supply taxed at 18% [13]. Since 22 September 2025 the platform pays GST on local delivery supplied through it [86]; from 1 November 2026 that was widened to "delivery services" [14].
 
 That is exactly why every fee and rate lives in `.env` / `Settings` and not in code: a fee change is a config change, not a redeploy. The defaults are illustrative and none of this is tax advice. The **whole bill is stored on the order**, so if the fee changes tomorrow, yesterday's receipts don't.
 
@@ -2269,6 +2303,182 @@ On kind, CI's cluster, the built-in plugin enforces policies: kind's kindnet imp
 
 Network policies are the first, cheapest layer: they come with Kubernetes, cost nothing to run, and are reviewed in Git like code.
 
+### Pricing like Zomato and Swiggy (Phase 11)
+
+Until Phase 10 the bill had a flat Rs 30 delivery fee and a flat platform fee. Real food apps price every order from its circumstances: how far it travels, how big it is, what time it is, whether it's raining, and which coupon you typed. Phase 11 adds all of that, with the same rule everywhere: **the customer sees every line before paying, and pays exactly that.**
+
+A dinner order, 5.2 km away, at 23:30, in the rain, with a coupon:
+
+```
+Item total                400.00
+Coupon WELCOME50         -100.00   50% off, capped at Rs 100
+Packaging (restaurant)     20.00
+Delivery fee               45.00   5.2 km (the 4-6 km slab)
+Surge fee                  40.00   late night 15 + rain 25
+Platform fee               14.90
+GST on food (5%)           16.00   on 400 - 100 + 20
+GST on fees (18%)          17.98   on 45 + 40 + 14.90
+---------------------------------
+Grand total               453.88
+```
+
+That exact bill is a test (`test_a_rainy_late_night_order_line_by_line`), and so is the rule that the lines add up to the total.
+
+### Q: Where does each fee come from?
+
+| Fee | QuickServe rule (defaults in `Settings`) | What real platforms do |
+|---|---|---|
+| Platform fee | Rs 14.90 on every order, before GST | Zomato raised it to Rs 14.90 before GST in March 2026, and Swiggy to Rs 17.58 including GST [10][11]. Both started at Rs 2 in 2023 [81]. |
+| Delivery fee | By road distance, in slabs: up to 2 km Rs 20, 4 km Rs 30, 6 km Rs 45, 8 km Rs 60. Nothing beyond 8 km. | The fee varies with distance and demand. Zomato has charged a long-distance fee for deliveries beyond 4 km [83]. |
+| Free delivery | Food worth Rs 299 or more, **and** within 4 km | Memberships offer free delivery within a distance limit. Swiggy and Zomato cut that limit from 10 km to 7 km [84]. |
+| Small order fee | Rs 15 when the food is under Rs 149 | "Small cart" fees are common: Blinkit charges Rs 20 under Rs 99 [81]. |
+| Surge: peak | Rs 10, 19:00–22:00 India time | Surge pricing at peak hours [81] |
+| Surge: late night | Rs 15, 23:00–05:00 | Late-night surcharges [81] |
+| Surge: rain | Rs 25 while "rain mode" is on | Rain surcharges, now charged even to Zomato Gold and Swiggy One members [82] |
+| Coupon | Percent (with a cap) or flat, on the food only | Every app has these |
+| GST | 5% on food and packaging, 18% on the platform's fees | See the GST question below |
+
+All of these are settings, not constants in code, so a city or a season can have different numbers without a code change. The defaults are illustrative, not what any platform charges today.
+
+### Q: How do you know how far away the customer is?
+
+The order now carries a map pin, `delivery_location: {lat, lng}`. In a real app it comes from the phone's GPS or a map picker; the typed address is for the rider. Restaurants have a location and a delivery radius (7 km by default).
+
+The distance is calculated in two steps ([`geo.py`](app/modules/pricing/geo.py)):
+
+1. **The straight line** between the two points on the Earth's surface, with the haversine formula.
+2. **Times 1.25**, to estimate the road distance. Roads aren't straight lines. Transport research calls the ratio between road and straight-line distance the *circuity factor* or *detour index*, and published per-country factors go back to Ballou, Rahardja and Sakai (2002) [85]. A 2026 measurement of 116 city pairs found roads 23.5% longer than the straight line at the median, and recommends multiplying by 1.2 when the straight-line distance is all you have [85]. Inside a city, with one-way streets and few direct roads, 1.25 is a reasonable middle.
+
+A real platform asks a routing service (Google Maps, OSRM) for the true road distance and travel time. That costs money and adds a network call to every price check. Estimating like this is the usual first version, and it's free and instant. Swapping in a real routing call later would change only `geo.py`.
+
+If the address is beyond the restaurant's radius, or beyond 8 km, the answer is `422`: "Pal Dhaba delivers up to 7.0 km; this address is 11.0 km away". This is checked **before** any stock is reserved, so a far-away order never locks dishes.
+
+### Q: Is the surge real? Real apps raise prices when there are too many orders and too few riders.
+
+Partly, and here's the honest version. Real surge pricing is **dynamic**: it compares demand (orders waiting) with supply (free riders nearby), zone by zone, every few minutes. QuickServe doesn't model riders' locations yet, so it can't do that. What it does instead is what platforms *also* do, alongside the dynamic part:
+
+- **Peak and late-night fees come from the clock.** The windows are in India time (`Asia/Kolkata`), because the database works in UTC. 14:00 UTC is 19:30 in India, which is peak hour (a test checks this). A window can cross midnight (`23:00-05:00`).
+- **Rain is a switch an admin flips:** `PUT /api/v1/admin/surge/rain` with `{"minutes": 120}`. It **switches itself off** after the given minutes. A forgotten switch can't overcharge everyone for a week. `GET /api/v1/pricing` shows anyone which surge fees apply right now, so an app can show a banner: "It's raining: Rs 25 extra to support delivery partners."
+
+### Q: Why are fee amounts settings, but "it's raining" a database row?
+
+Because they change at different speeds and for different reasons:
+
+- **Fee amounts** are business decisions. They're reviewed, changed on purpose and kept in Git's history, so deploying a new value is fine.
+- **Rain** is a fact about the world that changes within minutes, and an operations person must be able to change it right away without a deploy. So it's a row in `surge_flags`, with who set it and until when.
+
+A real platform has one such flag per city zone. QuickServe has one for everything.
+
+### Q: How do coupons work?
+
+A coupon ([`coupons/model.py`](app/modules/coupons/model.py)) has:
+- **A value:** a percent with an optional cap ("50% off up to Rs 100"), or a flat amount ("Rs 75 off").
+- **A minimum order value.** If you're short, the message says by how much: "add Rs 9.00 more".
+- **Optionally, one restaurant.** Otherwise it works everywhere.
+- **First order only**, or not.
+- **Limits:** a total limit ("the first 1,000 uses") and a per-customer limit.
+- **A validity window**, and an on/off switch.
+- **Who pays for it:**
+  - **Admins** create *platform-funded* coupons: the platform's marketing cost.
+  - **Restaurant owners** create coupons for *their own* restaurant only, funded from their share. An owner can't create a coupon for someone else's restaurant, or a platform-wide one.
+
+The discount applies to the **food only**, and never exceeds it. Fees are decided on the cart value **before** the discount: a coupon shouldn't turn a free-delivery order into a paid one (a test checks this).
+
+`seed.py` adds two demo coupons: **WELCOME50** (first order, 50% up to Rs 100, minimum Rs 149) and **FLAT75** (Rs 75 off above Rs 399, twice per customer, the first 1,000 uses).
+
+### Q: Twenty customers try to use the last five uses of a coupon at the same moment. Who gets them?
+
+Exactly five of them. Getting this right needs three layers, and the tests show each one is needed:
+
+1. **An atomic update.** Using a coupon is one statement: `UPDATE coupons SET times_used = times_used + 1 WHERE id = ... AND times_used < max_uses_total`. It's the same idea as the stock in [section 4](#q-forty-customers-want-the-last-ten-biryanis-at-the-same-moment-what-stops-overselling). Checking in Python first and then saving lets two requests both see "1 left".
+2. **Re-checking under the lock.** That `UPDATE` locks the coupon row until the order commits. Any other order using the same coupon waits at its own `UPDATE`. So the check *after* it ("has this customer already used it?", "is this really their first order?") can't be raced. A customer double-tapping "Pay" 8 times gets the coupon once. The mutation test, with this re-check removed, gave them **8 discounts**.
+3. **A database constraint**, as the last line of defence: `CHECK (times_used <= max_uses_total)`. With the limit removed from the `UPDATE` on purpose, PostgreSQL itself refused to record a sixth use.
+
+The tests run this with real threads: 20 customers racing for 5 uses get exactly 5, and the redemption table has exactly 5 rows.
+
+The trade-off: the row lock means orders using **the same** coupon commit one after another. That's fine for QuickServe. For a coupon that a whole country uses during an IPL final, it becomes a hot spot. Big platforms split the counter across several rows, or hand out unique single-use codes instead.
+
+### Q: What happens to the coupon if the order is cancelled?
+
+It's given back. Each use is a row in `coupon_redemptions`, with status `APPLIED`. When an order ends badly (cancelled, rejected by the restaurant, or never paid), that row becomes `RELEASED` in the **same transaction** as the status change, and the coupon's counter goes down by one. The customer can use the coupon again.
+
+For the same reason, a cancelled order doesn't count as your "first order" for a first-order coupon. Both behaviours are tested.
+
+### Q: How does GST work when there's a discount?
+
+A discount given at the time of sale and shown on the bill is **not part of the taxable value** (CGST Act, Section 15(3)(a)) [87]. So the 5% on food is calculated on the food *after* the discount: 5% of (400 − 100 + 20) = 16.00 in the example above.
+
+The 18% on fees is on the delivery, small order, surge and platform fees. Since **22 September 2025**, the platform itself pays GST at 18% on local delivery services supplied through it (Notification 17/2025-Central Tax (Rate)) [86]. A further notification widened that from "local delivery" to "delivery services" from 1 November 2026 [14].
+
+This is a simplification. How a *platform-funded* discount on a restaurant's food should be taxed is more complicated in real life. None of this is tax advice.
+
+### Q: What's a quote, and what's `expected_total` for?
+
+`POST /api/v1/orders/quote` takes the same body as placing an order and returns the bill line by line, **without reserving anything**. It runs the same code as the real order, so the two can only differ if something changed in between. Things that can change:
+- surge started;
+- it started raining;
+- the coupon's last use was taken;
+- a price changed.
+
+When the customer taps "Pay", the app sends the quoted `grand_total` back as `expected_total`. If the price has changed, the order is refused with **`409 Conflict`** and the new total (`new_grand_total`), and nothing is reserved. The app shows the new bill and asks again. The alternative, charging an amount the customer never saw, is how apps lose trust and sometimes get reported to consumer forums.
+
+One more difference: a coupon that doesn't apply **doesn't fail the quote**. The quote comes back without the discount, plus `coupon_error`: "WELCOME50 needs an order of Rs 149; add Rs 9.00 more". The checkout page can show that next to the coupon box. Placing an *order* with a coupon that doesn't apply does fail (`422`), because the customer asked for a price they can't have.
+
+### Q: How do I try it?
+
+Your database already has the demo data from earlier phases. Run the seed again: it adds the restaurants' locations and the demo coupons, and skips everything that exists.
+
+```bash
+kubectl -n quickserve exec deploy/api -- python -m scripts.seed      # Kubernetes
+docker compose --profile app run --rm migrate python -m scripts.seed # or Docker Compose
+```
+
+Then in Swagger (`/docs`), log in as `customer@quickserve.dev` and send `POST /api/v1/orders/quote`:
+
+```json
+{
+  "restaurant_id": "<Pal Dhaba's id from GET /api/v1/restaurants>",
+  "delivery_address": "House 12, Sector 22, Chandigarh",
+  "delivery_location": {"lat": 30.7333, "lng": 76.7794},
+  "items": [{"menu_item_id": "<Dal Makhani's id>", "quantity": 1}],
+  "coupon_code": "WELCOME50"
+}
+```
+
+Things to try:
+- **Small order:** change the quantity to see the small order fee appear or go away.
+- **Distance:** move `delivery_location` further away (`{"lat": 30.70, "lng": 76.70}` is out of range).
+- **Rain:** log in as the admin and turn on `PUT /api/v1/admin/surge/rain`, then quote again.
+- **Price change:** place the order with the quote's `grand_total` as `expected_total`, then try an old total to see the `409`.
+
+Restaurants created before Phase 11 (by you, not the seed) can set their location with `PUT /api/v1/restaurants/{id}/location`.
+
+### Q: What's tested?
+
+**57 new tests**, 204 in total:
+- **`test_pricing.py`, 33 pure tests:**
+  - every slab boundary (2.0 km is Rs 20, 2.1 km is Rs 30);
+  - free delivery at Rs 299 vs Rs 298.99, and at 4.0 vs 4.1 km;
+  - the small order fee at Rs 148.99 vs Rs 149;
+  - surge windows across midnight, and India time vs UTC;
+  - coupon caps and minimums;
+  - GST after discount;
+  - full bills that must add up line by line.
+- **`test_checkout.py`, 24 tests on real PostgreSQL:**
+  - every coupon rule;
+  - the two race tests;
+  - release on cancel and reject;
+  - the quote matching the order;
+  - `409` on a price change with nothing reserved;
+  - rain on and off;
+  - delivery areas;
+  - who may create coupons;
+  - the HTTP endpoints.
+- **The migration** was tested up, down and up again, and on a copy of a database seeded before Phase 11.
+- **The in-cluster smoke test** now checks out like an app does: quote, check that the lines add up, then order with `expected_total`.
+
+The tests switch the surge hours off by default (`PEAK_HOURS=[]` in `conftest.py`), because otherwise a test run at 8 pm would add a peak fee and fail. Tests about surge pass their own settings. A test suite whose result depends on the time of day is a classic source of flaky CI.
+
 ---
 
 ## 9. DevOps already in the project
@@ -2291,7 +2501,7 @@ PostgreSQL 16 and Redis 7 always, the same major versions as CI and, later, AWS.
 | `ruff check` and `ruff format --check` | Style arguments end; obvious bugs (unused imports, shadowed names) caught before review |
 | `alembic upgrade head` + `alembic check` | **Fails if someone changed a model but forgot to create a migration**, a very common production incident |
 | PostgreSQL 16 and Redis 7 **service containers** | Tests run against the same database and cache as production |
-| `pytest` | All 147 tests, including the concurrency, login-attack and Redis-outage tests |
+| `pytest` | All 204 tests, including the concurrency, login-attack and Redis-outage tests |
 | `concurrency: cancel-in-progress` | Two quick pushes cancel the older run instead of paying for both |
 | `timeout-minutes: 10` | A hung job can't burn CI minutes forever |
 | A second job, `docker`, in parallel | Builds the image and smoke-tests the whole stack in containers ([details](#q-what-does-the-ci-docker-job-prove-that-the-tests-dont)) |
@@ -2480,7 +2690,10 @@ quickserve/
 │       ├── restaurants/
 │       ├── menu/                 model (MenuItem, InventoryCycle), repository, service, cache,
 │       │                         analytics (ORM + raw SQL versions), schema, router
-│       ├── orders/               model, state_machine, pricing, repository, service, schema, router
+│       ├── orders/               model, state_machine, repository, service (quote + place), schema, router
+│       ├── pricing/              calculator (pure: every fee, GST, the itemised bill), geo (distance),
+│       │                         rain switch (SurgeFlag), GET /pricing (Phase 11)
+│       ├── coupons/              model (Coupon, CouponRedemption), race-safe redeem/release, router (Phase 11)
 │       ├── payments/             model, service, refunds (public interface), schema, router
 │       ├── outbox/               OutboxEvent model; record(), claim_batch(), retry backoff, retention
 │       └── notifications/        model, templates (who is told what), service, schema, router
@@ -2490,7 +2703,7 @@ quickserve/
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        147 tests, real PostgreSQL and Redis
+├── tests/                        204 tests, real PostgreSQL and Redis
 ├── infra/                        Terraform for AWS (Phase 6); start with infra/README.md
 │   ├── k8s/                      Kubernetes (Phase 7): base/ manifests, overlays/ (lite = Mac default, local = full,
 │   │                             ci, ci-lite), components/lite, deploy.sh,
@@ -2564,7 +2777,12 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **8b. FinOps and alerting** (done) | Alertmanager with routing, grouping, inhibition and a Watchdog, emailing a Mailpit inbox; CPU and memory recording rules per pod; a rightsizing report that prices requests vs real use in USD; a Grafana rightsizing row; CI checks the whole alert-to-email chain | Alert fatigue, dead man's switch, compressible vs incompressible resources, rightsizing, VPA |
 | **9. HTTPS front door** (done) | Gateway API with Envoy Gateway: one Gateway for every hostname, HTTP→HTTPS redirect, TLS from a local CA with automatic renewal (cert-manager), HSTS, timeouts, an edge rate limit on login, request IDs end to end; the API trusts exactly one proxy hop for the client IP; CI tests it all from outside the cluster | Gateway API vs Ingress, TLS termination, certificate chains, X-Forwarded-For spoofing, layered rate limiting |
 | **10. Network policies** (done) | Default deny in and out, DNS allowed, one allow-list per component (PostgreSQL only from the apps, Redis only from the API, the API only from the gateway, no internet for the apps); smoke tests in their own labelled pods; a check that makes real allowed and forbidden connections, with positive controls, in CI on every PR | Zero trust inside the cluster, least privilege, egress control, namespaceSelector + podSelector, proving enforcement |
-| **11. Next** (your choice) | Tracing with OpenTelemetry; OpenCost on a real cloud cluster; or applying the Phase 6 Terraform for a real deploy | |
+| **11. Pricing** (done) | Distance-based delivery fee (haversine x detour index, slabs, radius), free delivery for big orders nearby, small order fee, peak / late-night / rain surge (rain is an admin switch that expires), coupons (percent with cap, flat, minimums, first order, per-customer and total limits, platform- or restaurant-funded) with race-safe redemption, GST after discount, `POST /orders/quote` and `expected_total` | Pure functions for business rules, atomic counters and row locks, CHECK constraints as a safety net, time zones, price-change protection |
+| **12. Discovery** (next) | "Restaurants near me" within each one's delivery radius, sorted by distance, rating or delivery time; dish search; ratings and reviews only after a delivered order, with averages kept up to date | Geo queries in PostgreSQL, indexes and `EXPLAIN`, full-text search, keeping summary numbers in step |
+| **13. Frontend: customer app** | React + TypeScript (Vite): browse, search, menu, cart, the checkout bill from `/orders/quote`, pay, live order status and notifications; served through the HTTPS gateway | API client generated from OpenAPI, tokens in the browser, same origin for site and API |
+| **14. Frontend: restaurant and rider screens** | Owner dashboard (incoming orders, accept/prepare, menu and stock, coupons, today's sales); rider view (assigned orders, pick up, deliver) | Role-based UI on top of the backend's role checks |
+| **15. Tracing** | OpenTelemetry traces across browser, Envoy, API, SQL, outbox and notifier, viewed in Jaeger; N+1 detection; sampling | Distributed tracing, context propagation through the outbox, the cost of tracing |
+| **16. Live on AWS** | Apply the Phase 6 Terraform, a real domain with a Let's Encrypt certificate, GitHub Actions deploying after each merge, a smoke test against the live URL, then `terraform destroy` | Continuous delivery, real cloud costs, why one server instead of EKS |
 
 ---
 
@@ -2615,6 +2833,10 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 **What's graceful shutdown?** Handle `SIGTERM`, finish the current unit of work, then exit before the orchestrator sends `SIGKILL`.
 
 **Why request IDs?** One ID ties together every log line from one request across modules and services, and users can quote it when reporting a problem.
+
+**Two users redeem the last coupon at the same moment. How do you stop both getting it?** Make using it one atomic statement (`UPDATE ... SET used = used + 1 WHERE used < limit`), not "read, check in code, write". That UPDATE locks the row until commit, so re-check per-user rules right after it. Add a CHECK constraint so the database refuses an overspend even if the code is wrong. For a very hot coupon, split the counter or issue unique codes.
+
+**How do you stop a customer paying a price they didn't see?** Quote and order use the same pricing code; the client sends back the quoted total, and the server refuses (409 with the new total) if its own calculation differs. Never trust a price the client computed, and never silently charge a different one.
 
 **What does a default-deny NetworkPolicy break first?** DNS: with egress denied, pods can't resolve Service names, so add an allow rule to kube-dns on port 53 (UDP and TCP). Then allow each real path, remembering that both the sender's egress and the receiver's ingress must allow it. And prove it with real connections, because a plugin that ignores policies still accepts them.
 
@@ -2716,3 +2938,10 @@ Business and tax figures change often; the dates show when each was reported.
 78. minikube documentation, *Network Policy* (the default Kindnet plugin doesn't enforce them; use Calico). https://minikube.sigs.k8s.io/docs/handbook/network_policy/
 79. Kubernetes documentation, *Network Policies* (pods are isolated per direction by any policy that selects them; policies are additive; traffic from the pod's node is always allowed). https://kubernetes.io/docs/concepts/services-networking/network-policies/
 80. kindnet documentation, *Network Policies* (implemented with kube-network-policies; also supports Admin Network Policies). https://kindnet.sigs.k8s.io/docs/user/network-policies/
+81. Inc42, *India's Convenience Economy Is Getting Expensive* (platform fees from Rs 2 in 2023 to Rs 14.9 / Rs 17.58 in March 2026; late-night, surge and rain fees; Blinkit's Rs 20 small cart fee under Rs 99). https://inc42.com/features/indias-convenience-economy-is-getting-expensive/
+82. Free Press Journal, *Zomato Gold & Swiggy One members now pay rain surcharge*. https://www.freepressjournal.in/amp/business/food-delivery-loyalty-users-no-longer-get-fee-waiver-zomato-gold-swiggy-one-members-now-pay-rain-surcharge
+83. Restaurant India, *Zomato introduces 'long distance service fee' for deliveries beyond 4 km*. https://www.restaurantindia.in/news/tag/food-delivery-business?page=22
+84. TechEnclave forum, *The enshittification of Swiggy* (users report membership free-delivery distance cut from 10 km to 7 km; a forum, not an official source). https://techenclave.com/t/the-enshittification-of-swiggy/269349?page=5
+85. MapAtlas, *As the crow flies vs by road* (116 city pairs, September 2026: roads 23.5% longer at the median; multiply by 1.2 as a rule of thumb; cites Ballou, Rahardja and Sakai, *Selected country circuity factors for road travel distance estimation*, Transportation Research Part A, 2002). https://mapatlas.eu/blog/distance-as-the-crow-flies
+86. EY India, *CBIC issues notifications giving effect to the recommendations made by the GST Council* (e-commerce operators pay 18% on local delivery from 22 September 2025; Notification 17/2025-Central Tax (Rate)). https://www.ey.com/en_in/technical/alerts-hub/2025/09/cbic-issues-notifications-giving-effect-to-the-recommendations-made
+87. TaxGuru, *Section 15(3) of the CGST Act* (a discount given before or at the time of supply and recorded in the invoice is not part of the value of supply). https://taxguru.in/?p=823177

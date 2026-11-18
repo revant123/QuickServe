@@ -20,6 +20,11 @@ if "REDIS_URL" not in os.environ:
     _redis_base = Settings().redis_url.rsplit("/", 1)[0]
     os.environ["REDIS_URL"] = f"{_redis_base}/15"
 
+# Surge hours depend on the clock: without this, a test run at 8 pm would add
+# a peak fee and fail. Tests that check surge pass their own Settings.
+os.environ.setdefault("PEAK_HOURS", "[]")
+os.environ.setdefault("LATE_NIGHT_HOURS", "[]")
+
 # No metrics HTTP servers in tests (tests read the metrics registry directly).
 os.environ.setdefault("METRICS_PORT", "0")
 os.environ.setdefault("WORKER_METRICS_PORT", "0")
@@ -48,10 +53,13 @@ from app.modules.restaurants.model import Restaurant  # noqa: E402
 from app.modules.users.model import Role, User  # noqa: E402
 
 TEST_PASSWORD = "test-password-123"
+# Two points in Chandigarh about 0.8 km apart in a straight line (1.0 km by road).
+SECTOR_17 = (Decimal("30.739800"), Decimal("76.782700"))
+SECTOR_22 = {"lat": 30.7333, "lng": 76.7794}
 # Argon2 is slow ON PURPOSE (that is what makes stolen hashes hard to crack), so hash
 # the shared test password once instead of once per test user.
 TEST_PASSWORD_HASH = hash_password(TEST_PASSWORD)
-TABLES = "notifications, outbox_events, payments, order_status_events, order_items, orders, inventory_cycles, menu_items, restaurants, users"
+TABLES = "coupon_redemptions, coupons, surge_flags, notifications, outbox_events, payments, order_status_events, order_items, orders, inventory_cycles, menu_items, restaurants, users"
 
 # Safety guard: these tests TRUNCATE every table. Refuse to run against anything
 # that isn't clearly a test database (e.g. if DATABASE_URL in your shell points
@@ -136,7 +144,12 @@ def admin(make_user) -> User:
 @pytest.fixture
 def restaurant(db, owner) -> Restaurant:
     r = Restaurant(
-        owner_id=owner.id, name="Sharma Dhaba", address="Sector 17, Chandigarh", packaging_charge=Decimal("20.00")
+        owner_id=owner.id,
+        name="Sharma Dhaba",
+        address="Sector 17, Chandigarh",
+        packaging_charge=Decimal("20.00"),
+        latitude=SECTOR_17[0],
+        longitude=SECTOR_17[1],
     )
     db.add(r)
     db.commit()

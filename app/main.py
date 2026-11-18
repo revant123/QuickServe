@@ -86,7 +86,8 @@ def domain_error_handler(_: Request, exc: DomainError):
         headers["WWW-Authenticate"] = "Bearer"
     if isinstance(exc, TooManyRequests):
         headers["Retry-After"] = str(exc.retry_after)
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message}, headers=headers or None)
+    content = {"detail": exc.message, **getattr(exc, "extra", {})}
+    return JSONResponse(status_code=exc.status_code, content=content, headers=headers or None)
 
 
 @app.get("/", tags=["health"])

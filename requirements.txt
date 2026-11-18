@@ -14,3 +14,4 @@ PyJWT==2.15.1             # login tokens
 python-multipart==0.0.34  # lets FastAPI read the login form (OAuth2 password flow)
 redis==8.1.0              # cache, rate limits, logout deny list
 prometheus-client==0.26.0 # /metrics for Prometheus (Phase 7b)
+tzdata==2026.6            # time zones for surge hours (Asia/Kolkata), even in slim images (Phase 11)

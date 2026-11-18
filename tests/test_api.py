@@ -29,7 +29,13 @@ def test_full_order_journey(client, rider, admin):
     # Owner sets up the restaurant and a dish
     rest = client.post(
         "/api/v1/restaurants",
-        json={"name": "Pal Dhaba", "address": "Sector 28", "packaging_charge": "15.00"},
+        json={
+            "name": "Pal Dhaba",
+            "address": "Sector 28",
+            "packaging_charge": "15.00",
+            "latitude": "30.719300",
+            "longitude": "76.803000",
+        },
         headers=owner_h,
     ).json()
     item = client.post(
@@ -43,6 +49,7 @@ def test_full_order_journey(client, rider, admin):
     body = {
         "restaurant_id": rest["id"],
         "delivery_address": "House 5, Sector 15",
+        "delivery_location": {"lat": 30.7333, "lng": 76.7794},
         "items": [{"menu_item_id": item["id"], "quantity": 2}],
     }
     assert client.post("/api/v1/orders", json=body).status_code == 401  # not logged in
