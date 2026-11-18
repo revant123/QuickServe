@@ -60,16 +60,19 @@ code=$(c unknown.localhost "$HTTPS" -k -o /dev/null -w '%{http_code}' "https://u
 echo "   ok: 404"
 
 echo "5. The API sees the real client IP, and a forged X-Forwarded-For is ignored"
-# From inside the cluster (the worker pod) to the gateway's Service, claiming
-# to be 6.6.6.6. The API must log the worker pod's real address instead.
+# From inside the cluster (a smoke-test pod) to the gateway's Service, claiming
+# to be 6.6.6.6. The API must log the pod's real address instead. The pod
+# prints its own IP so we know what to expect.
 rid="gwcheck-$RANDOM$RANDOM"
-kubectl -n "$NS" exec deploy/worker -- python -c "
-import ssl, urllib.request
+image=$(kubectl -n "$NS" get deployment/worker -o jsonpath='{.spec.template.spec.containers[0].image}')
+client_ip=$(kubectl -n "$NS" run "gwcheck-$RANDOM" --image="$image" --image-pull-policy=IfNotPresent \
+  --restart=Never --labels=app.kubernetes.io/name=smoke-test --rm -i --quiet --command -- python -c "
+import socket, ssl, urllib.request
 ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
 req = urllib.request.Request('https://quickserve-gateway.envoy-gateway-system/health',
     headers={'Host': '$HOST', 'X-Request-ID': '$rid', 'X-Forwarded-For': '6.6.6.6'})
-assert urllib.request.urlopen(req, context=ctx, timeout=5).status == 200"
-worker_ip=$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=worker -o jsonpath='{.items[0].status.podIP}')
+assert urllib.request.urlopen(req, context=ctx, timeout=5).status == 200
+print(socket.gethostbyname(socket.gethostname()))")
 line=
 for _ in $(seq 1 10); do
   line=$(kubectl -n "$NS" logs -l app.kubernetes.io/name=api -c api --tail=500 | grep "$rid" || true)
@@ -77,8 +80,8 @@ for _ in $(seq 1 10); do
   sleep 1
 done
 echo "   API log line: $line"
-grep -q "\"client_ip\": \"$worker_ip\"" <<<"$line" || { echo "   expected client_ip $worker_ip (the worker pod)"; exit 1; }
-echo "   ok: same request ID in the API's log; client_ip is the worker pod ($worker_ip), not 6.6.6.6"
+grep -q "\"client_ip\": \"$client_ip\"" <<<"$line" || { echo "   expected client_ip $client_ip (the test pod)"; exit 1; }
+echo "   ok: same request ID in the API's log; client_ip is the test pod ($client_ip), not 6.6.6.6"
 
 echo "6. The edge rate limit on /api/v1/auth/login (60 a minute)"
 # GET, not POST: the API answers 405 at once, with no password hashing and no

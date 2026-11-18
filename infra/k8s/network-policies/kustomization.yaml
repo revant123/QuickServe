@@ -1,0 +1,26 @@
+# Network policies (Phase 10): which pod may talk to which, on which port.
+#
+# Without these, every pod in the cluster can reach every other pod: a bug or a
+# break-in in ANY pod could talk straight to PostgreSQL. With them, the default
+# is "nothing", and each allowed connection is written down below.
+#
+# A NetworkPolicy is only enforced if the cluster's network plugin supports it:
+#   kind (CI)         kindnet enforces them (kube-network-policies)
+#   minikube (Mac)    needs `minikube start --cni=calico`; the default ignores them
+# infra/k8s/netpol_check.sh proves they're enforced: it tries forbidden
+# connections and expects them to fail.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: quickserve
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: quickserve
+    includeSelectors: false
+
+resources:
+  - baseline.yaml # deny everything, then allow DNS
+  - apps.yaml # PostgreSQL, Redis, API, worker, notifier, migrations
+  - monitoring.yaml # Prometheus, Grafana, Alertmanager, Mailpit
+  - tests.yaml # the smoke-test pods CI and deploy.sh start

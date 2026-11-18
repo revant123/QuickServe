@@ -1,0 +1,35 @@
+# 1. Deny everything, in and out, for every pod in the namespace.
+# An empty podSelector ({}) selects all pods. Policies only ADD permissions, so
+# from here on, each file below opens exactly one path at a time.
+#
+# Two things stay allowed whatever the policies say: traffic from the pod's own
+# node (the kubelet's health checks; `kubectl get --raw` through the API server)
+# and the replies to an allowed connection.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# 2. Every pod may ask the cluster's DNS for addresses. Without this, "postgres"
+# or "redis" can't be turned into an IP, and everything breaks at once.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }

@@ -1,0 +1,135 @@
+# One policy per component: who may connect TO it (ingress) and where it may
+# connect (egress). Ports are the POD's ports (8000), not the Service's (80):
+# policies see traffic after the Service has picked a pod.
+#
+# PostgreSQL: only the apps that use it. No egress at all (DNS aside).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: postgres }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: api } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: worker } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: notifier } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: migrate } }
+      ports:
+        - { protocol: TCP, port: 5432 }
+  egress: []
+---
+# Redis: only the API uses it (cache, login limits, logged-out tokens).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: redis }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: api } }
+      ports:
+        - { protocol: TCP, port: 6379 }
+  egress: []
+---
+# The API: customers reach it ONLY through the gateway (Envoy, in its own
+# namespace). Prometheus reads its metrics port. The smoke tests call it too.
+# Out: PostgreSQL and Redis, nothing else: no internet, so a compromised API
+# can't send data anywhere.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: api }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        # namespaceSelector AND podSelector in ONE entry: Envoy pods of OUR
+        # gateway, in envoy-gateway-system. (As two separate entries it would
+        # mean "any pod in that namespace OR pods with that label here".)
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system }
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: quickserve
+              gateway.envoyproxy.io/owning-gateway-namespace: quickserve
+        - podSelector: { matchLabels: { app.kubernetes.io/name: smoke-test } }
+      ports:
+        - { protocol: TCP, port: 8000 }
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+      ports:
+        - { protocol: TCP, port: 9100 }
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: postgres } }
+      ports:
+        - { protocol: TCP, port: 5432 }
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: redis } }
+      ports:
+        - { protocol: TCP, port: 6379 }
+---
+# The worker: PostgreSQL only. It never needs the API, Redis or the internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: worker }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+      ports:
+        - { protocol: TCP, port: 9101 }
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: postgres } }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# The notifier: PostgreSQL only (it delivers notifications into the database).
+# When it sends real SMS or push messages, the provider's address goes here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: notifier
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: notifier }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+      ports:
+        - { protocol: TCP, port: 9102 }
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: postgres } }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# The migration Job: PostgreSQL only. Nothing connects to it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: migrate
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: migrate }
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: postgres } }
+      ports:
+        - { protocol: TCP, port: 5432 }
