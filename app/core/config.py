@@ -95,12 +95,40 @@ class Settings(BaseSettings):
     # An order that is never paid releases its reserved stock after this window.
     unpaid_order_timeout_seconds: int = 600
 
-    # --- Bill components. Illustrative values; real platforms change these often. ---
-    platform_fee: Decimal = Decimal("12.00")
-    delivery_fee: Decimal = Decimal("30.00")
+    # --- Pricing (Phase 11). See app/modules/pricing/calculator.py and the README. ---
+    # Illustrative values modelled on Zomato/Swiggy in 2026. Real platforms tune
+    # them per city and per week, which is why they're settings, not constants.
+    # The timezone the surge windows below are written in.
+    pricing_timezone: str = "Asia/Kolkata"
+    # Flat, every order, before GST (Zomato's was Rs 14.90 from March 2026).
+    platform_fee: Decimal = Decimal("14.90")
+    # Delivery fee by ROAD distance, as (up to km, fee) slabs. Beyond the last
+    # slab nobody delivers, whatever the restaurant's own radius says.
+    delivery_fee_slabs: list[tuple[Decimal, Decimal]] = [
+        (Decimal("2"), Decimal("20.00")),
+        (Decimal("4"), Decimal("30.00")),
+        (Decimal("6"), Decimal("45.00")),
+        (Decimal("8"), Decimal("60.00")),
+    ]
+    # Free delivery for bigger orders, but only nearby: a long ride costs the
+    # platform the same whatever the order is worth.
     free_delivery_above: Decimal = Decimal("299.00")
-    gst_rate_food: Decimal = Decimal("0.05")  # restaurant service via an e-commerce operator
-    gst_rate_fees: Decimal = Decimal("0.18")  # platform's own fees (platform + delivery)
+    free_delivery_max_km: Decimal = Decimal("4")
+    # Straight-line distance x this = estimated road distance (a "detour index").
+    road_detour_factor: Decimal = Decimal("1.25")
+    # Small orders cost the platform as much to deliver as big ones.
+    small_order_below: Decimal = Decimal("149.00")
+    small_order_fee: Decimal = Decimal("15.00")
+    # Surge: time windows in pricing_timezone, "HH:MM-HH:MM" (may cross midnight).
+    peak_hours: list[str] = ["19:00-22:00"]
+    peak_fee: Decimal = Decimal("10.00")
+    late_night_hours: list[str] = ["23:00-05:00"]
+    late_night_fee: Decimal = Decimal("15.00")
+    # Charged while an admin has switched "rain mode" on (it switches itself off).
+    rain_fee: Decimal = Decimal("25.00")
+    # GST, applied by the platform as the e-commerce operator (Section 9(5)).
+    gst_rate_food: Decimal = Decimal("0.05")  # restaurant food and packaging
+    gst_rate_fees: Decimal = Decimal("0.18")  # the platform's own services: delivery, platform, small-order, surge
 
     @model_validator(mode="after")
     def refuse_dev_secret_outside_local(self):

@@ -57,6 +57,12 @@ ORDER_STATUS_CHANGES = Counter(
     "Order status changes, by new status and who made the change",
     ["to_status", "actor"],
 )
+# Pricing (Phase 11). Labels are small fixed sets (who funded it; why surge),
+# never the coupon code: thousands of codes would mean thousands of series.
+COUPON_DISCOUNT = Counter(
+    "quickserve_coupon_discount_rupees_total", "Coupon discount given on placed orders, by who pays", ["funded_by"]
+)
+SURGE_ORDERS = Counter("quickserve_surge_orders_total", "Orders that paid a surge fee, by reason", ["reason"])
 PAYMENTS = Counter("quickserve_payments_total", "Payment attempts recorded, by outcome", ["outcome"])
 MENU_CACHE = Counter("quickserve_menu_cache_requests_total", "Customer menu reads, by cache result", ["result"])
 LOGINS = Counter("quickserve_logins_total", "Login attempts, by outcome", ["outcome"])

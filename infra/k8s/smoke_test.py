@@ -25,6 +25,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from decimal import Decimal
 
 BASE = "http://api"
 
@@ -63,9 +64,15 @@ def order_and_notification(token):
     body = {
         "restaurant_id": r["id"],
         "delivery_address": "Smoke test",
+        # A point right next to the restaurant (Phase 11: delivery is priced by distance).
+        "delivery_location": {"lat": float(r["latitude"]) + 0.002, "lng": float(r["longitude"])},
         "items": [{"menu_item_id": dish["id"], "quantity": 1}],
     }
-    _, order = post("/api/v1/orders", body, token)
+    # Checkout like an app: quote, show it, then order at exactly that price.
+    _, bill = post("/api/v1/orders/quote", body, token)
+    assert sum(Decimal(line["amount"]) for line in bill["lines"]) == Decimal(bill["grand_total"]), bill
+    _, order = post("/api/v1/orders", {**body, "expected_total": bill["grand_total"]}, token)
+    assert order["grand_total"] == bill["grand_total"], (order, bill)
     status, _ = post(f"/api/v1/orders/{order['id']}/payments", None, token, {"Idempotency-Key": f"smoke-{order['id']}"})
     assert status in (200, 201), status
     deadline = time.monotonic() + 30

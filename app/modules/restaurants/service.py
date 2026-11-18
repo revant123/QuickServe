@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import Forbidden, NotFound
 from app.database.session import transaction
 from app.modules.restaurants.model import Restaurant
-from app.modules.restaurants.schema import RestaurantCreate
+from app.modules.restaurants.schema import LocationUpdate, RestaurantCreate
 from app.modules.users.model import Role, User
 
 
@@ -47,3 +47,11 @@ def ensure_can_manage(db: Session, restaurant_id: uuid.UUID, user: User) -> Rest
 def owns_restaurant(db: Session, restaurant_id: uuid.UUID, user: User) -> bool:
     restaurant = db.get(Restaurant, restaurant_id)
     return restaurant is not None and user.role is Role.RESTAURANT_OWNER and restaurant.owner_id == user.id
+
+
+def set_location(db: Session, restaurant_id: uuid.UUID, data: LocationUpdate, user: User) -> Restaurant:
+    with transaction(db):
+        restaurant = ensure_can_manage(db, restaurant_id, user)
+        for field, value in data.model_dump().items():
+            setattr(restaurant, field, value)
+    return restaurant

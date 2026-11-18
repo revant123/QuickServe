@@ -10,6 +10,7 @@ from app.modules.orders.schema import (
     CancelRequest,
     OrderCreate,
     OrderOut,
+    QuoteOut,
     StatusEventOut,
     StatusUpdate,
     TimeoutReport,
@@ -23,6 +24,28 @@ router = APIRouter(tags=["orders"])
 def place_order(body: OrderCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Customers only. The order belongs to the logged-in customer."""
     return service.place_order(db, body, user)
+
+
+@router.post("/orders/quote", response_model=QuoteOut)
+def quote_order(body: OrderCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """The bill for this cart, right now: every line, with the reasons. Reserves nothing.
+
+    Show it at checkout, then place the order with expected_total set to its
+    grand_total: if anything changed in between, the order is refused (409)
+    with the new total instead of silently charging more.
+    """
+    bill, coupon_error = service.quote(db, body, user)
+    return QuoteOut(
+        restaurant_id=body.restaurant_id,
+        distance_km=bill.distance_km,
+        surge_reasons=list(bill.surge_reasons),
+        coupon_code=bill.coupon_code,
+        coupon_error=coupon_error,
+        lines=[line.__dict__ for line in bill.lines],
+        item_total=bill.item_total,
+        discount=bill.discount,
+        grand_total=bill.grand_total,
+    )
 
 
 @router.get("/orders/{order_id}", response_model=OrderOut)

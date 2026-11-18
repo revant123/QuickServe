@@ -80,6 +80,7 @@ def test_payments_counted_once_even_when_retried(client, restaurant, customer, m
     body = {
         "restaurant_id": str(restaurant.id),
         "delivery_address": "House 1",
+        "delivery_location": {"lat": 30.7333, "lng": 76.7794},
         "items": [{"menu_item_id": str(item.id), "quantity": 1}],
     }
     order = client.post("/api/v1/orders", json=body, headers=h).json()

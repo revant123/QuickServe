@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, func
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, Timestamps, UUIDPrimaryKey
@@ -42,6 +42,16 @@ class Order(UUIDPrimaryKey, Timestamps, Base):
     gst_food: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     gst_fees: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     grand_total: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    # Phase 11. server_default 0 so orders placed before these columns existed
+    # read as "no such fee", which is what they were.
+    small_order_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), server_default=text("0"), default=Decimal("0"))
+    surge_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), server_default=text("0"), default=Decimal("0"))
+    surge_reasons: Mapped[str | None] = mapped_column(String(100))  # "peak,rain"
+    discount: Mapped[Decimal] = mapped_column(Numeric(10, 2), server_default=text("0"), default=Decimal("0"))
+    coupon_code: Mapped[str | None] = mapped_column(String(30))
+    delivery_latitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
+    delivery_longitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
+    distance_km: Mapped[Decimal | None] = mapped_column(Numeric(5, 1))
 
     pay_by: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
