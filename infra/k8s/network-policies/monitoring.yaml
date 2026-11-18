@@ -1,0 +1,112 @@
+# Prometheus: reads every metrics port, sends alerts to Alertmanager, and asks
+# the Kubernetes API which pods exist (service discovery).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prometheus
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: prometheus }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: grafana } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: smoke-test } }
+      ports:
+        - { protocol: TCP, port: 9090 }
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: api } }
+      ports:
+        - { protocol: TCP, port: 9100 }
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: worker } }
+      ports:
+        - { protocol: TCP, port: 9101 }
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: notifier } }
+      ports:
+        - { protocol: TCP, port: 9102 }
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: alertmanager } }
+      ports:
+        - { protocol: TCP, port: 9093 }
+    # The Kubernetes API server. It isn't a pod, so it can only be matched by
+    # address, and its address differs per cluster (minikube 8443, kind 6443,
+    # 443 through the "kubernetes" Service). This allows those ports to any
+    # address: the one rule here that is wider than it should be. On a real
+    # cluster you'd put the control plane's IP range in the cidr.
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }
+        - { protocol: TCP, port: 8443 }
+---
+# Grafana: viewers come through the gateway (or a port-forward); it only talks
+# to Prometheus. No internet: no update checks, no plugin downloads.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: grafana }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system }
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: quickserve
+              gateway.envoyproxy.io/owning-gateway-namespace: quickserve
+        - podSelector: { matchLabels: { app.kubernetes.io/name: smoke-test } }
+      ports:
+        - { protocol: TCP, port: 3000 }
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+      ports:
+        - { protocol: TCP, port: 9090 }
+---
+# Alertmanager: alerts come from Prometheus; it sends email through Mailpit.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: alertmanager
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: alertmanager }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: smoke-test } }
+      ports:
+        - { protocol: TCP, port: 9093 }
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: mailpit } }
+      ports:
+        - { protocol: TCP, port: 1025 }
+---
+# Mailpit: receives SMTP from Alertmanager; its web page/API for the tests.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mailpit
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: mailpit }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: alertmanager } }
+      ports:
+        - { protocol: TCP, port: 1025 }
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: smoke-test } }
+      ports:
+        - { protocol: TCP, port: 8025 }
+  egress: []

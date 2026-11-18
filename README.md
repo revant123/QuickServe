@@ -33,6 +33,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
    - [Notifications and the outbox pattern (Phase 8)](#notifications-and-the-outbox-pattern-phase-8)
    - [Alert emails and rightsizing (Phase 8b: FinOps)](#alert-emails-and-rightsizing-phase-8b-finops)
    - [HTTPS front door: Gateway API (Phase 9)](#https-front-door-gateway-api-phase-9)
+   - [Network policies (Phase 10)](#network-policies-phase-10)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -235,6 +236,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| Network policies (Phase 10) | [Network policy Q&A](#network-policies-phase-10); `infra/k8s/network-policies/`, `infra/k8s/netpol_check.sh`, `infra/k8s/smoke.sh` |
 | HTTPS front door (Phase 9) | [Gateway Q&A](#https-front-door-gateway-api-phase-9); `infra/k8s/gateway/` (certificates, Gateway, routes, policies), `infra/k8s/addons.sh`, `infra/k8s/gateway_check.sh`, `app/core/client_ip.py`, `tests/test_client_ip.py` |
 | Alert emails and rightsizing (Phase 8b: FinOps) | [Phase 8b Q&A](#alert-emails-and-rightsizing-phase-8b-finops); `infra/k8s/monitoring/alertmanager.yml` + `alertmanager.yaml` (Alertmanager, Mailpit), the Watchdog and rightsizing rules in `rules.yml`, `infra/k8s/rightsizing.py`, `tests/test_rightsizing.py` |
 | Notification service with the outbox pattern (Phase 8) | [Outbox Q&A](#notifications-and-the-outbox-pattern-phase-8); `app/modules/outbox/`, `app/modules/notifications/`, `app/notifier.py`, `infra/k8s/base/notifier.yaml`, `tests/test_notifications.py` |
@@ -258,7 +260,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Background jobs | A separate worker (`python -m app.worker`) expires unpaid orders and auto-rejects orders the restaurant didn't accept, every 30 seconds; safe to run several (`FOR UPDATE SKIP LOCKED`); graceful shutdown | |
 | Caching, logs and metrics | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses; Prometheus metrics (RED + business), 6 tested alert rules, a Grafana dashboard with cost per order; Alertmanager emails with grouping, inhibition and a Watchdog; a rightsizing report priced in USD | Tracing, real cost data (OpenCost) |
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
-| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), Kubernetes manifests deployed and tested on a kind cluster in every CI run (rolling update with zero failed requests), liveness/readiness checks, pinned and locked dependencies, an HTTPS front door (Gateway API with Envoy Gateway, certificates from cert-manager, host routing, an edge rate limit) | Applying the Terraform to a real AWS account, NetworkPolicies |
+| DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), Kubernetes manifests deployed and tested on a kind cluster in every CI run (rolling update with zero failed requests), liveness/readiness checks, pinned and locked dependencies, an HTTPS front door (Gateway API with Envoy Gateway, certificates from cert-manager, host routing, an edge rate limit), network policies (default deny, one allow-list per component, enforcement proven in CI) | Applying the Terraform to a real AWS account, mTLS between pods |
 
 Everything except browsing restaurants and menus needs a login. Orders belong to the logged-in customer, and who may change an order's status is decided by the login token, never by the request body. See [section 7](#7-login-tokens-and-permissions).
 
@@ -1375,7 +1377,7 @@ You need Docker Desktop running. QuickKart is not affected: minikube runs in its
 
 ```bash
 brew install minikube kubectl                  # one time
-minikube start --cpus 4 --memory 3072          # a one-machine cluster, ~1 minute
+minikube start --cpus 4 --memory 3072 --cni=calico   # a one-machine cluster, ~1 minute; Calico enforces network policies (Phase 10)
 minikube addons enable metrics-server          # lets the autoscaler see CPU use
 
 cd ~/quickserve
@@ -1536,7 +1538,7 @@ The cluster disappears when the job ends. Before any of that, `kubeconform` chec
 ### Q: What's not done yet?
 
 - **Ingress with HTTPS.** Done in Phase 9, with Gateway API instead of Ingress: see [HTTPS front door](#https-front-door-gateway-api-phase-9).
-- **NetworkPolicies** ("only the API may talk to PostgreSQL"). These need a network plugin that enforces them.
+- **NetworkPolicies** ("only the API may talk to PostgreSQL"). Done in Phase 10: see [Network policies](#network-policies-phase-10).
 - **Metrics and dashboards** (Prometheus and Grafana).
 - **A worker heartbeat** so Kubernetes can tell a stuck worker from a busy one.
 
@@ -2100,9 +2102,9 @@ X-Forwarded-For: <whatever the client sent>, <the address Envoy saw>
 - garbage in the header;
 - the uvicorn behaviour that caused the bug.
 
-The CI check repeats the attack end to end and expects the worker pod's real IP in the API's log. The request log line now has `client_ip` for exactly this kind of investigation.
+The CI check repeats the attack end to end from a test pod inside the cluster and expects that pod's real IP in the API's log. The request log line now has `client_ip` for exactly this kind of investigation.
 
-The remaining gap: any pod in the cluster could call the API directly with a fake header, because the whole pod network is trusted. The fix for that is a **NetworkPolicy** that lets only the gateway (and Prometheus) reach the API pods, which needs a network plugin that enforces policies.
+The remaining gap was that any pod in the cluster could call the API directly with a fake header, because the whole pod network is trusted. Phase 10 closes it: a **NetworkPolicy** lets only the gateway's Envoy pods (plus Prometheus and the smoke tests) reach the API. See [Network policies](#network-policies-phase-10).
 
 ### Q: What does the gateway cost?
 
@@ -2118,10 +2120,117 @@ After all the earlier steps, `infra/k8s/gateway_check.sh` runs against the kind 
 2. Plain HTTP gets a 301 to HTTPS.
 3. The Grafana hostname reaches Grafana through the same Gateway.
 4. An unknown hostname gets 404 from Envoy.
-5. A request from the worker pod with a forged `X-Forwarded-For: 6.6.6.6` is logged by the API with the worker's real IP, under the same request ID.
+5. A request from a test pod with a forged `X-Forwarded-For: 6.6.6.6` is logged by the API with that pod's real IP, under the same request ID.
 6. Repeated requests to the login path are partly stopped with Envoy's 429.
 
 Manifests for the new CRD types can't be checked by `kubeconform` (it has no schema for them), so they're skipped there. The API server then validates them for real when `deploy.sh` applies them on kind.
+
+### Network policies (Phase 10)
+
+Until now, every pod could open a connection to every other pod in the cluster. If any single pod were broken into (a dependency with a security hole, a leaked token), the attacker could connect straight to PostgreSQL, Redis or Prometheus from it. Phase 10 adds **network policies**: the default becomes "no connections at all", and each connection the system really needs is written down and allowed one by one.
+
+```mermaid
+flowchart LR
+    envoy["Envoy (gateway)"] -->|8000| api
+    envoy -->|3000| grafana
+    api -->|5432| pg[(PostgreSQL)]
+    api -->|6379| redis[(Redis)]
+    worker -->|5432| pg
+    notifier -->|5432| pg
+    migrate["migrate Job"] -->|5432| pg
+    prom["Prometheus"] -->|"9100 / 9101 / 9102"| api & worker & notifier
+    prom -->|9093| am["Alertmanager"]
+    grafana -->|9090| prom
+    am -->|1025| mailpit["Mailpit"]
+    smoke["smoke-test pods"] -.->|"tests only"| api & prom & grafana & am & mailpit
+```
+
+Every arrow is an allowed connection. Anything that isn't an arrow is blocked: the worker calling the API, the API reaching the internet, or any other namespace reaching the database.
+
+### Q: How do I run this on my Mac?
+
+minikube's default network plugin **ignores** network policies. The minikube docs say a vanilla install supports none of them, because its default plugin, Kindnet, doesn't by design; a plugin like Calico is needed [78]. Kubernetes stores the policies either way, so without Calico everything *looks* fine and nothing is enforced. That's why there's a check script (below).
+
+The network plugin can only be chosen when the cluster is created, so minikube must be recreated once. This deletes the cluster's data (test orders and so on); the seed script puts the demo data back. Run each line on its own:
+
+```bash
+minikube delete
+minikube start --cpus 4 --memory 3072 --cni=calico
+minikube addons enable metrics-server
+infra/k8s/deploy.sh
+kubectl -n quickserve exec deploy/api -- python -m scripts.seed
+infra/k8s/netpol_check.sh
+```
+
+The last command should end with **"Network policies enforced."**
+
+### Q: How is it written?
+
+In [`infra/k8s/network-policies/`](infra/k8s/network-policies/):
+
+1. **`baseline.yaml`**:
+   - `default-deny-all` selects every pod (`podSelector: {}`) and blocks all traffic in **and** out.
+   - `allow-dns` then lets every pod ask the cluster DNS (kube-dns, port 53) for addresses. Without it, names like `postgres` can't be looked up, and everything breaks at once. It's the classic first mistake with deny-all.
+2. **`apps.yaml`** and **`monitoring.yaml`**: one policy per component, each saying who may connect to it and where it may connect.
+3. **`tests.yaml`**: what the smoke-test pods may reach.
+
+Policies only ever **add** permissions. There's no "deny" rule and no order: a connection is allowed if any policy allows it. For a connection between two pods, **both** sides must allow it: the sender's egress and the receiver's ingress. That's why the API's egress lists PostgreSQL, *and* PostgreSQL's ingress lists the API.
+
+| Pod | Who may connect to it | Where it may connect |
+|---|---|---|
+| PostgreSQL | api, worker, notifier, migrate (5432) | nowhere |
+| Redis | api (6379) | nowhere |
+| API | the gateway's Envoy pods (8000), Prometheus (9100), smoke tests | PostgreSQL, Redis. **No internet.** |
+| Worker | Prometheus (9101) | PostgreSQL |
+| Notifier | Prometheus (9102) | PostgreSQL |
+| Prometheus | Grafana, smoke tests (9090) | the three metrics ports, Alertmanager, the Kubernetes API |
+| Grafana | the gateway (3000), smoke tests | Prometheus |
+| Alertmanager | Prometheus, smoke tests (9093) | Mailpit (SMTP) |
+| Mailpit | Alertmanager (1025), smoke tests (8025) | nowhere |
+
+Two things are allowed whatever the policies say. Kubernetes allows traffic from a pod's own node, which is why the kubelet's health checks still work [79]. It also allows the replies to an allowed connection.
+
+### Q: Why can't the API reach the internet? It's not doing anything there.
+
+That's exactly why. A policy should describe what the code **does**, not what it might do one day. If an attacker gets code running in the API pod, the first thing they want is to send data out ("exfiltration") or download tools. With no egress except PostgreSQL and Redis, both fail. When QuickServe calls a real payment gateway or SMS provider, that one address gets added to the notifier's or API's policy, as a reviewed change in Git.
+
+The same thinking is why the **worker can't call the API**, and the notifier can't reach Redis. They never need to.
+
+### Q: Why do the smoke tests run in their own pods now?
+
+Until Phase 10, `smoke_test.py` ran inside the **worker** pod (`kubectl exec deploy/worker`). Under the new policies, that would mean letting the worker reach the API, Grafana, Alertmanager and Mailpit. That's a lot of access for a background job that only needs the database, granted just so tests can run.
+
+So [`infra/k8s/smoke.sh`](infra/k8s/smoke.sh) now starts a short-lived pod with its own label, `app.kubernetes.io/name: smoke-test`, runs the script in it, and deletes it. The policies give that label exactly what the tests need. This applies beyond tests: **every client gets its own identity**, so you can give it access without giving the same access to something else.
+
+### Q: How does the gateway get through, from another namespace?
+
+The API's ingress rule combines a `namespaceSelector` (the namespace `envoy-gateway-system`) and a `podSelector` (Envoy pods labelled `owning-gateway-name: quickserve`) **in one entry**. That means "those pods in that namespace".
+
+Written as two separate list entries, it would mean "**any** pod in that namespace, **or** pods with that label in our namespace", which is much wider. This one-dash difference is one of the easiest NetworkPolicy mistakes to make. It also closes the gap left in Phase 9: only our gateway can reach the API, so a random pod can no longer send it a fake `X-Forwarded-For`.
+
+### Q: How do we know the policies really work?
+
+[`infra/k8s/netpol_check.sh`](infra/k8s/netpol_check.sh) makes real connections from real pods, and CI runs it on every pull request:
+
+- **Inside the namespace**, each app's allowed connections must work and its forbidden ones must fail:
+  - api → PostgreSQL and Redis: open;
+  - api → Prometheus and the internet: blocked;
+  - worker → API and Redis: blocked;
+  - a smoke-test pod → PostgreSQL: blocked.
+- **From another namespace**, a temporary namespace with no policies of its own: PostgreSQL, Redis, the API and Prometheus must all be blocked.
+- **Two positive controls.** The same pod must reach the gateway (the front door is open to everyone) and the internet. That proves it really can make connections, so "blocked" above means the policy did it. Without those controls, a test that failed every connection for some other reason would look like perfect security.
+
+Kubernetes accepts a NetworkPolicy even when the network plugin ignores it. A check like this is the only way to know.
+
+On kind, CI's cluster, the built-in plugin enforces policies: kind's kindnet implements them with the kube-network-policies project [80]. On a Mac, that's what `--cni=calico` is for.
+
+### Q: What would a bigger platform add?
+
+- **Cluster-wide rules.** Admin network policies are rules a platform team sets for all namespaces, which app teams can't override. Example: "nothing may reach the cloud metadata address".
+- **Policies by name instead of IP.** Calico or Cilium can allow egress to `api.razorpay.com` instead of an IP address, which changes.
+- **mTLS between pods.** With a service mesh, the database checks *which service* is connecting, not just which IP.
+
+Network policies are the first, cheapest layer: they come with Kubernetes, cost nothing to run, and are reviewed in Git like code.
 
 ---
 
@@ -2350,8 +2459,9 @@ quickserve/
 │   │                             smoke_test.py, rightsizing.py (Phase 8b: requests vs real use)
 │   │   ├── monitoring/           Prometheus config, alert rules + their tests, Grafana dashboard (Phase 7b),
 │   │                             Alertmanager + Mailpit (Phase 8b)
-│   │   └── gateway/              HTTPS front door (Phase 9): certificates, Gateway, routes, policies;
+│   │   ├── gateway/              HTTPS front door (Phase 9): certificates, Gateway, routes, policies;
 │   │                             addons.sh installs Envoy Gateway + cert-manager, gateway_check.sh tests it
+│   │   └── network-policies/     who may talk to whom (Phase 10); netpol_check.sh proves it, smoke.sh runs tests
 │   ├── bootstrap/                budget alert + S3 state bucket, once per account
 │   ├── envs/dev/                 network, database, secrets, app server (+ tests/)
 │   └── modules/                  budget, network, database, app_server (each with tests/)
@@ -2415,7 +2525,8 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **8. Notification service** (done) | Transactional outbox written with every order change, a separate notifier process (own Deployment, metrics, liveness, alerts) that turns events into notifications: per-order ordering, retries with backoff, dead letters, idempotent consumer, retention; notifications API | Dual writes, the outbox pattern, at-least-once delivery, idempotency, poison messages, event-carried state |
 | **8b. FinOps and alerting** (done) | Alertmanager with routing, grouping, inhibition and a Watchdog, emailing a Mailpit inbox; CPU and memory recording rules per pod; a rightsizing report that prices requests vs real use in USD; a Grafana rightsizing row; CI checks the whole alert-to-email chain | Alert fatigue, dead man's switch, compressible vs incompressible resources, rightsizing, VPA |
 | **9. HTTPS front door** (done) | Gateway API with Envoy Gateway: one Gateway for every hostname, HTTP→HTTPS redirect, TLS from a local CA with automatic renewal (cert-manager), HSTS, timeouts, an edge rate limit on login, request IDs end to end; the API trusts exactly one proxy hop for the client IP; CI tests it all from outside the cluster | Gateway API vs Ingress, TLS termination, certificate chains, X-Forwarded-For spoofing, layered rate limiting |
-| **10. Next** (your choice) | NetworkPolicies (only the gateway may reach the API); tracing with OpenTelemetry; OpenCost on a real cloud cluster; or applying the Phase 6 Terraform for a real deploy | |
+| **10. Network policies** (done) | Default deny in and out, DNS allowed, one allow-list per component (PostgreSQL only from the apps, Redis only from the API, the API only from the gateway, no internet for the apps); smoke tests in their own labelled pods; a check that makes real allowed and forbidden connections, with positive controls, in CI on every PR | Zero trust inside the cluster, least privilege, egress control, namespaceSelector + podSelector, proving enforcement |
+| **11. Next** (your choice) | Tracing with OpenTelemetry; OpenCost on a real cloud cluster; or applying the Phase 6 Terraform for a real deploy | |
 
 ---
 
@@ -2466,6 +2577,8 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 **What's graceful shutdown?** Handle `SIGTERM`, finish the current unit of work, then exit before the orchestrator sends `SIGKILL`.
 
 **Why request IDs?** One ID ties together every log line from one request across modules and services, and users can quote it when reporting a problem.
+
+**What does a default-deny NetworkPolicy break first?** DNS: with egress denied, pods can't resolve Service names, so add an allow rule to kube-dns on port 53 (UDP and TCP). Then allow each real path, remembering that both the sender's egress and the receiver's ingress must allow it. And prove it with real connections, because a plugin that ignores policies still accepts them.
 
 **Ingress or Gateway API?** Gateway API: roles are split (GatewayClass for the platform, Gateway for the operator, HTTPRoute for app teams), redirects, timeouts and header changes are standard fields instead of annotations, and the most used Ingress controller, ingress-nginx, was retired in March 2026.
 
@@ -2562,3 +2675,6 @@ Business and tax figures change often; the dates show when each was reported.
 75. Gateway API, *Implementations* (conformant implementations, including Envoy Gateway; AWS Load Balancer Controller integration). https://gateway-api.sigs.k8s.io/implementations/
 76. Envoy Gateway documentation, *Local Rate Limit* (per Envoy instance; no distinct per-value matching, use Global for that). https://gateway.envoyproxy.io/latest/tasks/traffic/local-rate-limit
 77. cert-manager documentation, *Securing gateway resources* (Gateway API support) and *CA issuer*. https://cert-manager.io/docs/usage/gateway/
+78. minikube documentation, *Network Policy* (the default Kindnet plugin doesn't enforce them; use Calico). https://minikube.sigs.k8s.io/docs/handbook/network_policy/
+79. Kubernetes documentation, *Network Policies* (pods are isolated per direction by any policy that selects them; policies are additive; traffic from the pod's node is always allowed). https://kubernetes.io/docs/concepts/services-networking/network-policies/
+80. kindnet documentation, *Network Policies* (implemented with kube-network-policies; also supports Admin Network Policies). https://kindnet.sigs.k8s.io/docs/user/network-policies/

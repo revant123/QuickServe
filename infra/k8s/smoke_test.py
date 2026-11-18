@@ -1,10 +1,12 @@
 """Smoke test for QuickServe running in Kubernetes. Standard library only.
 
 It runs INSIDE the cluster, so it reaches the API through its Service name
-("http://api"), exactly like another service would:
+("http://api"), exactly like another service would. infra/k8s/smoke.sh starts
+it in a pod of its own (label app.kubernetes.io/name=smoke-test), which the
+network policies (Phase 10) allow to reach exactly what the checks need:
 
-    kubectl -n quickserve exec -i deploy/worker -- python - check    < infra/k8s/smoke_test.py
-    kubectl -n quickserve exec -i deploy/worker -- python - watch 60 < infra/k8s/smoke_test.py
+    infra/k8s/smoke.sh check
+    infra/k8s/smoke.sh watch 60
 
 check       health, login as the demo customer, call /users/me, then place and pay
             for an order and wait for the notifier to deliver "Payment received"
