@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # Deploy QuickServe to the current Kubernetes cluster, in the right order.
 #
-#   infra/k8s/deploy.sh                       # minikube: deploys the image of the commit you have checked out
-#   IMAGE_TAG=main infra/k8s/deploy.sh        # ...or whatever `main` points to right now
-#   infra/k8s/deploy.sh infra/k8s/overlays/ci # what CI uses (an image built in the job)
+#   infra/k8s/deploy.sh                          # minikube, "lite": no monitoring, 1 API pod
+#   infra/k8s/deploy.sh infra/k8s/overlays/local # minikube, everything (needs more memory)
+#   IMAGE_TAG=main infra/k8s/deploy.sh           # ...or whatever `main` points to right now
+#   infra/k8s/deploy.sh infra/k8s/overlays/ci    # what CI uses (an image built in the job)
+#
+# Both minikube setups deploy the image of the commit you have checked out.
 #
 # Order: database and Redis -> migration Job -> API and worker. The API and
 # worker pods also wait for the migration themselves (init containers), so the
 # order holds even if someone runs `kubectl apply` by hand.
 set -euo pipefail
 
-OVERLAY="${1:-infra/k8s/overlays/local}"
+# Lite by default: the full stack doesn't fit next to QuickKart on an 8 GB Mac
+# (see infra/k8s/components/lite).
+OVERLAY="${1:-infra/k8s/overlays/lite}"
 NS=quickserve
 REPO=revant123/quickserve
 
@@ -85,6 +90,16 @@ for attempt in 1 2 3 4 5 6; do
   sleep 10
 done
 
+# kubectl apply only adds and updates; it never removes what an overlay no
+# longer contains. Switching from the full stack to lite would leave Prometheus
+# and friends running (and using the memory lite is meant to save), so remove
+# them explicitly.
+if [[ "$OVERLAY" == *lite* ]] && kubectl -n "$NS" get deployment/prometheus >/dev/null 2>&1; then
+  echo "Removing the monitoring stack (it isn't part of lite)..."
+  kubectl kustomize "$(dirname "$0")/monitoring" | kubectl delete --ignore-not-found -f -
+  kubectl -n "$NS" delete httproute grafana --ignore-not-found
+fi
+
 echo "Waiting for PostgreSQL and Redis..."
 kubectl -n "$NS" rollout status statefulset/postgres --timeout=180s
 kubectl -n "$NS" rollout status deployment/redis --timeout=120s
@@ -105,11 +120,15 @@ kubectl -n "$NS" rollout status deployment/api --timeout=300s
 kubectl -n "$NS" rollout status deployment/worker --timeout=300s
 kubectl -n "$NS" rollout status deployment/notifier --timeout=300s
 
-echo "Waiting for Prometheus, Grafana, Alertmanager and Mailpit..."
-kubectl -n "$NS" rollout status deployment/prometheus --timeout=180s
-kubectl -n "$NS" rollout status deployment/grafana --timeout=180s
-kubectl -n "$NS" rollout status deployment/alertmanager --timeout=120s
-kubectl -n "$NS" rollout status deployment/mailpit --timeout=120s
+# The monitoring stack is in the full overlays only (not in lite).
+has_monitoring() { kubectl -n "$NS" get deployment/prometheus >/dev/null 2>&1; }
+if has_monitoring; then
+  echo "Waiting for Prometheus, Grafana, Alertmanager and Mailpit..."
+  kubectl -n "$NS" rollout status deployment/prometheus --timeout=180s
+  kubectl -n "$NS" rollout status deployment/grafana --timeout=180s
+  kubectl -n "$NS" rollout status deployment/alertmanager --timeout=120s
+  kubectl -n "$NS" rollout status deployment/mailpit --timeout=120s
+fi
 
 echo "Waiting for the HTTPS certificate and the gateway (Envoy)..."
 kubectl -n "$NS" wait --for=condition=Ready certificate/quickserve-tls --timeout=180s
@@ -122,21 +141,30 @@ kubectl -n envoy-gateway-system rollout status deployment/quickserve-gateway --t
 
 kubectl -n "$NS" get pods
 echo
-echo "Deployed. The front door (Phase 9), in its own terminal:"
+echo "Deployed ($OVERLAY). The front door (Phase 9), in its own terminal:"
 echo "  kubectl -n envoy-gateway-system port-forward service/quickserve-gateway 8443:443"
-echo "  -> https://quickserve.localhost:8443/docs   and   https://grafana.quickserve.localhost:8443"
+echo "  -> https://quickserve.localhost:8443/docs"
 echo "     (the browser warns about the certificate until you trust QuickServe's local CA: see the README)"
 echo
-echo "Or each service directly (each in its own terminal):"
+echo "Or the API directly:"
 echo "  kubectl -n $NS port-forward service/api 8003:80          -> http://127.0.0.1:8003/docs"
-echo "  kubectl -n $NS port-forward service/grafana 3005:3000    -> http://127.0.0.1:3005  (dashboards)"
-echo "  kubectl -n $NS port-forward service/prometheus 9095:9090 -> http://127.0.0.1:9095  (raw metrics, alerts)"
-echo "  kubectl -n $NS port-forward service/alertmanager 9096:9093 -> http://127.0.0.1:9096 (grouped alerts, silences)"
-echo "  kubectl -n $NS port-forward service/mailpit 8026:8025    -> http://127.0.0.1:8026  (the alert emails)"
+echo
+if has_monitoring; then
+  echo "Monitoring (each in its own terminal):"
+  echo "  https://grafana.quickserve.localhost:8443 through the gateway, or:"
+  echo "  kubectl -n $NS port-forward service/grafana 3005:3000    -> http://127.0.0.1:3005  (dashboards)"
+  echo "  kubectl -n $NS port-forward service/prometheus 9095:9090 -> http://127.0.0.1:9095  (raw metrics, alerts)"
+  echo "  kubectl -n $NS port-forward service/alertmanager 9096:9093 -> http://127.0.0.1:9096 (grouped alerts, silences)"
+  echo "  kubectl -n $NS port-forward service/mailpit 8026:8025    -> http://127.0.0.1:8026  (the alert emails)"
+  echo
+  echo "FinOps: what the pods reserve vs what they use:"
+  echo "  python3 infra/k8s/rightsizing.py"
+else
+  echo "Monitoring isn't in the lite setup. For dashboards and alert emails, stop QuickKart, then:"
+  echo "  infra/k8s/deploy.sh infra/k8s/overlays/local"
+fi
 echo
 echo "Checks you can run any time:"
+echo "  infra/k8s/smoke.sh check     # log in, browse, place an order"
 echo "  infra/k8s/gateway_check.sh   # HTTPS, routing, real client IP, edge rate limit"
 echo "  infra/k8s/netpol_check.sh    # network policies are really enforced (needs --cni=calico on minikube)"
-echo
-echo "FinOps: what the pods reserve vs what they use:"
-echo "  python3 infra/k8s/rightsizing.py"

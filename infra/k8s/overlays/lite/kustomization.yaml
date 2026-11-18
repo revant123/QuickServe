@@ -1,0 +1,22 @@
+# Your Mac, the everyday setup: everything except the monitoring stack, and one
+# API pod (see ../../components/lite for why). infra/k8s/deploy.sh uses this
+# by default. For dashboards and alert emails, use overlays/local instead (it
+# needs more memory: stop QuickKart first).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - ../../gateway
+  - ../../network-policies
+
+components:
+  - ../../components/lite
+
+images:
+  - name: quickserve
+    newName: ghcr.io/revant123/quickserve
+    newTag: main
+
+patches:
+  - path: pull-always.yaml # same reason as overlays/local

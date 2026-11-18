@@ -1564,7 +1564,7 @@ flowchart LR
 
 ### Q: How do I see the dashboard?
 
-`infra/k8s/deploy.sh` now also starts Prometheus and Grafana. After deploying, open two more terminals:
+The monitoring stack is part of the **full** setup. Since Phase 10, plain `infra/k8s/deploy.sh` deploys the lighter "lite" setup without it (see [why](#q-why-does-deploysh-deploy-a-lite-setup-on-the-mac)). So stop QuickKart first, deploy the full setup with `infra/k8s/deploy.sh infra/k8s/overlays/local`, and then open two more terminals:
 
 ```bash
 kubectl -n quickserve port-forward service/grafana 3005:3000      # http://127.0.0.1:3005
@@ -1827,7 +1827,7 @@ flowchart LR
 
 ### Q: How do I see the alert emails?
 
-After `infra/k8s/deploy.sh` (run each line on its own):
+After the full setup, `infra/k8s/deploy.sh infra/k8s/overlays/local` (run each line on its own):
 
 ```bash
 kubectl -n quickserve port-forward service/mailpit 8026:8025       # http://127.0.0.1:8026
@@ -2164,6 +2164,36 @@ infra/k8s/netpol_check.sh
 
 The last command should end with **"Network policies enforced."**
 
+### Q: Why does `deploy.sh` deploy a "lite" setup on the Mac?
+
+Because the first try at the steps above ran out of memory, and it's a lesson worth keeping.
+
+**What happened.** On an 8 GB Mac, Docker Desktop has about 3.8 GB, and minikube was given 3 GB of it. By Phase 10, the cluster had to hold:
+- Kubernetes itself;
+- Calico, which is heavier than minikube's default plugin;
+- Envoy Gateway and cert-manager;
+- PostgreSQL, Redis, the API, worker and notifier;
+- Prometheus, Grafana, Alertmanager and Mailpit.
+
+That was too much, and it failed in a chain:
+1. Free memory dropped to 82 MB and the machine started swapping.
+2. Everything slowed down, so health checks timed out.
+3. Kubernetes restarted the "dead" pods (calico-node again and again, even the API server). Restarts cost more CPU, and the load average reached 88 on 4 cores.
+4. QuickKart's API container, running in the same Docker Desktop, crashed. That was the moment to stop minikube.
+
+None of it was a bug in the policies. It was **capacity planning**, on a laptop instead of a cloud bill.
+
+**What lite changes** ([`infra/k8s/components/lite`](infra/k8s/components/lite/kustomization.yaml)): it leaves out the monitoring stack, and it runs one API pod (the autoscaler can still add a second). Everything else is the same: the gateway with HTTPS, the network policies, the database, Redis and all three app processes. The changes are written once as a Kustomize **component** and used by two overlays: `overlays/lite` (your Mac) and `overlays/ci-lite` (CI). That way, CI tests exactly what your Mac runs.
+
+| Command | Setup | Has |
+|---|---|---|
+| `infra/k8s/deploy.sh` | lite (default) | everything except monitoring; 1 API pod |
+| `infra/k8s/deploy.sh infra/k8s/overlays/local` | full | plus Prometheus, Grafana, Alertmanager, Mailpit; 2 API pods. Stop QuickKart first. |
+
+Switching from full to lite **removes** the monitoring pods. `kubectl apply` only adds and updates; it never deletes what an overlay no longer lists, so `deploy.sh` deletes those pods explicitly. Otherwise they'd keep running and keep using the memory lite is meant to save.
+
+CI now runs the whole Kubernetes test **twice in parallel**, once per setup. Each run also records how much memory the entire cluster uses, so the trade-off is measured, not guessed (see the CI job's summary page).
+
 ### Q: How is it written?
 
 In [`infra/k8s/network-policies/`](infra/k8s/network-policies/):
@@ -2455,7 +2485,8 @@ quickserve/
 │   └── create_test_db.sql        runs on first Postgres container start
 ├── tests/                        147 tests, real PostgreSQL and Redis
 ├── infra/                        Terraform for AWS (Phase 6); start with infra/README.md
-│   ├── k8s/                      Kubernetes (Phase 7): base/ manifests, overlays/local and ci, deploy.sh,
+│   ├── k8s/                      Kubernetes (Phase 7): base/ manifests, overlays/ (lite = Mac default, local = full,
+│   │                             ci, ci-lite), components/lite, deploy.sh,
 │   │                             smoke_test.py, rightsizing.py (Phase 8b: requests vs real use)
 │   │   ├── monitoring/           Prometheus config, alert rules + their tests, Grafana dashboard (Phase 7b),
 │   │                             Alertmanager + Mailpit (Phase 8b)

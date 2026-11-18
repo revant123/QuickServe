@@ -249,6 +249,12 @@ jobs:
   kubernetes:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # Twice, in parallel: the full stack (what a server runs) and "lite" (what
+    # an 8 GB Mac runs: no monitoring, one API pod). Both must work.
+    strategy:
+      fail-fast: false
+      matrix:
+        overlay: [ci, ci-lite]
     env:
       KIND_VERSION: v0.33.0
       NS: quickserve
@@ -262,11 +268,12 @@ jobs:
           # Gateway API, Envoy Gateway and cert-manager objects have no built-in
           # schema here (they're CRDs): they are skipped, and the API server
           # validates them against the installed CRDs when deploy.sh applies them.
-          for overlay in local ci; do
+          for overlay in local lite ci ci-lite; do
             kubectl kustomize "infra/k8s/overlays/$overlay" | ./kubeconform -strict -ignore-missing-schemas -summary -
           done
 
       - name: Check the Prometheus and Alertmanager configs, unit-test the rules
+        if: matrix.overlay == 'ci'
         run: |
           docker run --rm -v "$PWD/infra/k8s/monitoring:/etc/prometheus:ro" --entrypoint promtool \
             prom/prometheus:v3.16.0 check config /etc/prometheus/prometheus.yml
@@ -286,7 +293,7 @@ jobs:
           kind load docker-image quickserve:ci --name quickserve
 
       - name: Deploy (add-ons, database, Redis, migration Job, apps, monitoring, gateway)
-        run: infra/k8s/deploy.sh infra/k8s/overlays/ci
+        run: infra/k8s/deploy.sh infra/k8s/overlays/${{ matrix.overlay }}
 
       - name: Smoke test from inside the cluster
         run: |
@@ -313,12 +320,14 @@ jobs:
           infra/k8s/smoke.sh check
 
       - name: Monitoring - Prometheus scrapes the pods, Grafana has the dashboard, alerts reach email
+        if: matrix.overlay == 'ci'
         run: |
           infra/k8s/smoke.sh monitoring
           # The worker's liveness probe (its heartbeat) never had to restart it.
           test "$(kubectl -n $NS get pods -l app.kubernetes.io/name=worker -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}')" = "0"
 
       - name: FinOps - rightsizing report (requests vs real usage)
+        if: matrix.overlay == 'ci'
         run: |
           # Retried a few times: the CPU numbers need a few scrapes before they exist.
           for attempt in 1 2 3 4 5 6; do
@@ -332,6 +341,16 @@ jobs:
 
       - name: Network policies - allowed connections work, forbidden ones fail
         run: infra/k8s/netpol_check.sh
+
+      - name: FinOps - memory used by the whole cluster (full vs lite)
+        run: |
+          # The kind "node" is one Docker container holding ALL of Kubernetes:
+          # the control plane, the network plugin, the add-ons and our pods.
+          # Its memory is what a laptop's Docker Desktop has to provide.
+          usage=$(docker stats --no-stream --format '{{.MemUsage}}' quickserve-control-plane)
+          echo "Cluster memory with overlays/${{ matrix.overlay }}: $usage"
+          echo "Cluster memory with overlays/${{ matrix.overlay }}: **$usage**" >> "$GITHUB_STEP_SUMMARY"
+          kubectl get pods -A --no-headers | awk '{print $1}' | sort | uniq -c
 
       - name: Show the cluster if something failed
         if: failure()
