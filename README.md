@@ -2102,7 +2102,7 @@ X-Forwarded-For: <whatever the client sent>, <the address Envoy saw>
 - garbage in the header;
 - the uvicorn behaviour that caused the bug.
 
-The CI check repeats the attack end to end and expects the worker pod's real IP in the API's log. The request log line now has `client_ip` for exactly this kind of investigation.
+The CI check repeats the attack end to end from a test pod inside the cluster and expects that pod's real IP in the API's log. The request log line now has `client_ip` for exactly this kind of investigation.
 
 The remaining gap was that any pod in the cluster could call the API directly with a fake header, because the whole pod network is trusted. Phase 10 closes it: a **NetworkPolicy** lets only the gateway's Envoy pods (plus Prometheus and the smoke tests) reach the API. See [Network policies](#network-policies-phase-10).
 
@@ -2120,7 +2120,7 @@ After all the earlier steps, `infra/k8s/gateway_check.sh` runs against the kind 
 2. Plain HTTP gets a 301 to HTTPS.
 3. The Grafana hostname reaches Grafana through the same Gateway.
 4. An unknown hostname gets 404 from Envoy.
-5. A request from the worker pod with a forged `X-Forwarded-For: 6.6.6.6` is logged by the API with the worker's real IP, under the same request ID.
+5. A request from a test pod with a forged `X-Forwarded-For: 6.6.6.6` is logged by the API with that pod's real IP, under the same request ID.
 6. Repeated requests to the login path are partly stopped with Envoy's 429.
 
 Manifests for the new CRD types can't be checked by `kubeconform` (it has no schema for them), so they're skipped there. The API server then validates them for real when `deploy.sh` applies them on kind.
