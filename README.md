@@ -2599,9 +2599,9 @@ Because the list is read far more often than reviews are written. A page of 20 r
 **The race, measured.** The tempting ORM version reads the number into Python, adds one and writes it back:
 
 ```python
-r = db.get(Restaurant, order.restaurant_id)        # SELECT
-r.rating_count = r.rating_count + 1                 # Python does the maths
-r.rating_sum = r.rating_sum + data.rating           # UPDATE ... SET rating_count = 7 (a constant!)
+r = db.get(Restaurant, order.restaurant_id)  # SELECT
+r.rating_count = r.rating_count + 1  # Python does the maths
+r.rating_sum = r.rating_sum + data.rating  # UPDATE ... SET rating_count = 7 (a constant!)
 ```
 
 I swapped this into the service and ran `test_ten_reviews_at_once_are_all_counted` three times: 10 customers reviewing at the same moment. The totals counted **3, 4 and 3** of the 10 reviews. The others were lost updates: two transactions read the same old count, and both wrote "old + 1". The atomic version counts all 10, every time. It's the same lesson as Phase 2's stock counter and Phase 11's coupons, and it's why the cheat sheet says "put the arithmetic in the UPDATE".
