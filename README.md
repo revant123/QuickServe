@@ -2192,7 +2192,14 @@ None of it was a bug in the policies. It was **capacity planning**, on a laptop 
 
 Switching from full to lite **removes** the monitoring pods. `kubectl apply` only adds and updates; it never deletes what an overlay no longer lists, so `deploy.sh` deletes those pods explicitly. Otherwise they'd keep running and keep using the memory lite is meant to save.
 
-CI now runs the whole Kubernetes test **twice in parallel**, once per setup. Each run also records how much memory the entire cluster uses, so the trade-off is measured, not guessed (see the CI job's summary page).
+CI now runs the whole Kubernetes test **twice in parallel**, once per setup. Each run also records how much memory the entire cluster uses, so the trade-off is measured, not guessed. The first measurement, on kind after all the tests (November 2026):
+
+| Setup | Whole cluster's memory | QuickServe pods |
+|---|---|---|
+| full (`ci`) | **1.90 GiB** | 11 |
+| lite (`ci-lite`) | **1.44 GiB** | 6 |
+
+Lite saves about 0.46 GiB, a quarter of the total. These are numbers from a quiet, freshly tested cluster. On your Mac, add minikube's own overhead and Calico (kind's network plugin is lighter), plus the spikes while everything starts at once. That's how the full setup went past 3 GB. Lite leaves real headroom for that, and for QuickKart.
 
 ### Q: How is it written?
 
