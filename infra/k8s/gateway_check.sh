@@ -50,9 +50,13 @@ location=$(c "$HOST" "$HTTP" -o /dev/null -w '%{http_code} %{redirect_url}' "htt
 echo "   ok: $location"
 
 echo "3. Another hostname, same Gateway: Grafana"
-c "grafana.$HOST" "$HTTPS" -o "$tmp/body" "https://grafana.$HOST:$HTTPS/api/health"
-grep -q '"database": *"ok"' "$tmp/body"
-echo "   ok: Grafana answers on grafana.$HOST"
+if kubectl -n "$NS" get httproute/grafana >/dev/null 2>&1; then
+  c "grafana.$HOST" "$HTTPS" -o "$tmp/body" "https://grafana.$HOST:$HTTPS/api/health"
+  grep -q '"database": *"ok"' "$tmp/body"
+  echo "   ok: Grafana answers on grafana.$HOST"
+else
+  echo "   skipped: no Grafana in the lite setup"
+fi
 
 echo "4. A hostname with no route gets 404 from Envoy, never the API"
 code=$(c unknown.localhost "$HTTPS" -k -o /dev/null -w '%{http_code}' "https://unknown.localhost:$HTTPS/health")
