@@ -13,4 +13,5 @@ from app.modules.outbox.model import OutboxEvent  # noqa: F401
 from app.modules.payments.model import Payment  # noqa: F401
 from app.modules.pricing.model import SurgeFlag  # noqa: F401
 from app.modules.restaurants.model import Restaurant  # noqa: F401
+from app.modules.reviews.model import Review  # noqa: F401
 from app.modules.users.model import User  # noqa: F401

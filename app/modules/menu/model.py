@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     CheckConstraint,
+    Computed,
     DateTime,
     ForeignKey,
     Index,
@@ -34,6 +35,7 @@ from sqlalchemy import (
     or_,
     text,
 )
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.ext.hybrid import hybrid_method
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -68,6 +70,19 @@ class MenuItem(UUIDPrimaryKey, Timestamps, Base):
     # we know customers wanted more than we sold.
     sold_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Full-text search (Phase 12). A GENERATED column: PostgreSQL computes it from
+    # name and description on every INSERT/UPDATE, so it can never be stale and
+    # no application code has to remember to fill it. Words in the name weigh
+    # more ('A') than words in the description ('B') when ranking.
+    search_vector: Mapped[str] = mapped_column(
+        TSVECTOR,
+        Computed(
+            "setweight(to_tsvector('english', name), 'A') || setweight(to_tsvector('english', description), 'B')",
+            persisted=True,
+        ),
+        deferred=True,  # never loaded unless asked for: nobody needs to read it
+    )
+
     restaurant: Mapped["Restaurant"] = relationship(back_populates="menu_items", lazy="raise")
     cycles: Mapped[list["InventoryCycle"]] = relationship(
         back_populates="menu_item", lazy="raise", order_by="InventoryCycle.cycle_no"
@@ -83,6 +98,10 @@ class MenuItem(UUIDPrimaryKey, Timestamps, Base):
             " OR (NOT track_stock AND stock IS NULL)",
             name="stock_consistent",
         ),
+        # GIN indexes for search. One for full-text (search_vector @@ query), one
+        # of trigrams for ILIKE '%naan%' and typo-tolerant matching ("paner").
+        Index("ix_menu_items_search_vector", "search_vector", postgresql_using="gin"),
+        Index("ix_menu_items_name_trgm", "name", postgresql_using="gin", postgresql_ops={"name": "gin_trgm_ops"}),
     )
 
     @property
