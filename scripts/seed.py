@@ -16,6 +16,7 @@ from app.modules.coupons.model import Coupon, CouponFunder
 from app.modules.menu.model import MenuItem
 from app.modules.menu.schema import MenuItemCreate
 from app.modules.menu.service import create_menu_item
+from app.modules.orders import dispatch
 from app.modules.orders.model import OrderStatus
 from app.modules.orders.schema import GeoPoint, OrderCreate, OrderLineIn
 from app.modules.orders.service import change_status, place_order
@@ -192,10 +193,12 @@ def deliver_and_review(db, restaurant: Restaurant, reviewer: User, owner: User, 
         (OrderStatus.ACCEPTED, owner),
         (OrderStatus.PREPARING, owner),
         (OrderStatus.READY, owner),
-        (OrderStatus.OUT_FOR_DELIVERY, rider),
-        (OrderStatus.DELIVERED, rider),
     ]:
         change_status(db, order.id, status, actor)
+    # Phase 14: the rider claims it, picks it up, and delivers it with the customer's code.
+    dispatch.claim(db, order.id, rider)
+    change_status(db, order.id, OrderStatus.OUT_FOR_DELIVERY, rider)
+    change_status(db, order.id, OrderStatus.DELIVERED, rider, delivery_code=order.delivery_code)
     create_review(db, order.id, ReviewCreate(rating=rating, comment=comment), reviewer)
 
 

@@ -15,7 +15,7 @@ from app.modules.payments.model import Payment, PaymentStatus
 from app.modules.payments.schema import SimulatedOutcome
 from app.modules.payments.service import pay
 from app.modules.users.model import Role
-from tests.helpers import order_payload
+from tests.helpers import order_payload, rider_steps
 
 
 def _paid_order(db, customer, restaurant, *lines):
@@ -66,10 +66,9 @@ def test_illegal_transitions_are_refused(db, restaurant, customer, make_item, ow
         (S.ACCEPTED, owner),
         (S.PREPARING, owner),
         (S.READY, owner),
-        (S.OUT_FOR_DELIVERY, rider),
-        (S.DELIVERED, rider),
     ]:
         change_status(db, order.id, status, actor)
+    rider_steps(db, order.id, rider)
     with pytest.raises(InvalidTransition):
         change_status(db, order.id, S.PREPARING, owner)  # DELIVERED is final
 
@@ -85,7 +84,7 @@ def test_who_you_are_decides_what_you_can_do(db, restaurant, customer, make_item
     with pytest.raises(NotFound):
         change_status(db, order.id, S.ACCEPTED, other_owner)  # not their restaurant: order "doesn't exist"
     with pytest.raises(NotFound):
-        change_status(db, order.id, S.ACCEPTED, rider)  # riders only see orders once READY
+        change_status(db, order.id, S.ACCEPTED, rider)  # riders only see orders they've claimed
     with pytest.raises(NotFound):
         get_order(db, order.id, other_customer)
 

@@ -92,6 +92,21 @@ class Settings(BaseSettings):
     # --- Real-world order rules (see README: "Business rules borrowed from Zomato and Swiggy") ---
     # A restaurant must accept a paid order within this window, or it is auto-rejected.
     restaurant_accept_timeout_seconds: int = 240
+
+    # Phase 14: riders and restaurant payouts. Illustrative numbers, not any
+    # platform's real rates.
+    # A rider's pay for one order: a base amount plus a per-km amount for the
+    # restaurant-to-customer distance, rounded to whole rupees.
+    rider_base_pay: Decimal = Decimal("20")
+    rider_pay_per_km: Decimal = Decimal("6")
+    # Wrong delivery codes allowed before the order is locked for support.
+    # 5 tries at a 4-digit code: a 0.05% chance of guessing it.
+    delivery_code_max_attempts: int = 5
+    # The platform's commission on the restaurant's food sales, and the GST the
+    # restaurant pays on that commission (a service). Reported Indian commission
+    # rates range from about 16% to 30%.
+    restaurant_commission_percent: Decimal = Decimal("20")
+    gst_on_commission_percent: Decimal = Decimal("18")
     # An order that is never paid releases its reserved stock after this window.
     unpaid_order_timeout_seconds: int = 600
 

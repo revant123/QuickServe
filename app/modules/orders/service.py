@@ -1,6 +1,7 @@
 """Order placement and lifecycle."""
 
 import logging
+import secrets
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -18,6 +19,7 @@ from app.core.exceptions import (
     NotFound,
     OutOfStock,
     PriceChanged,
+    WrongDeliveryCode,
 )
 from app.core.logging import log_event
 from app.core.metrics import (
@@ -39,6 +41,7 @@ from app.modules.orders.model import Order, OrderItem, OrderStatus, OrderStatusE
 from app.modules.orders.schema import OrderCreate, OrderSummary, TimeoutReport
 from app.modules.orders.state_machine import (
     ACTORS,
+    AUTO_REJECT_REASON,
     CUSTOMER_CANCELLABLE,
     FAILED_ENDINGS,
     RELEASE_STOCK_FROM,
@@ -55,8 +58,14 @@ from app.modules.users.model import Role, User
 
 log = logging.getLogger("quickserve.orders")
 
-# Riders see orders only once they're ready for pickup.
-RIDER_VISIBLE = {OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY, OrderStatus.DELIVERED}
+
+def new_delivery_code() -> str:
+    """4 random digits from the operating system's secure generator.
+
+    `random.randint` would be predictable: its sequence can be reconstructed
+    from enough outputs. `secrets` is the module meant for codes like this.
+    """
+    return f"{secrets.randbelow(10_000):04d}"
 
 
 def _open_restaurant_for(db: Session, data: OrderCreate, customer: User) -> Restaurant:
@@ -180,6 +189,7 @@ def place_order(db: Session, data: OrderCreate, customer: User, settings: Settin
             gst_food=bill.gst_food,
             gst_fees=bill.gst_fees,
             grand_total=bill.grand_total,
+            delivery_code=new_delivery_code(),
             items=[
                 OrderItem(
                     menu_item_id=row.id,
@@ -234,7 +244,10 @@ def _actor_for(db: Session, order: Order, user: User) -> str:
         return "customer"
     if user.role is Role.RESTAURANT_OWNER and owns_restaurant(db, order.restaurant_id, user):
         return "restaurant"
-    if user.role is Role.RIDER and order.status in RIDER_VISIBLE:
+    # Phase 14: a rider sees an order only once it's theirs (claimed). Orders
+    # waiting in the pool are shown through the pool endpoint, without the
+    # customer's address.
+    if user.role is Role.RIDER and order.rider_id == user.id:
         return "rider"
     raise NotFound("Order not found")
 
@@ -386,14 +399,52 @@ def lock_order(db: Session, order_id: uuid.UUID) -> Order:
     return order
 
 
-def change_status(db: Session, order_id: uuid.UUID, target: OrderStatus, user: User, note: str | None = None) -> Order:
+def change_status(
+    db: Session,
+    order_id: uuid.UUID,
+    target: OrderStatus,
+    user: User,
+    note: str | None = None,
+    delivery_code: str | None = None,
+    settings: Settings | None = None,
+) -> Order:
+    settings = settings or get_settings()
+    tries_left = None
     with transaction(db):
         order = lock_order(db, order_id)
         actor = _actor_for(db, order, user)  # decided by the token, never by the request body
         if actor not in ACTORS.get(target, set()):
             raise Forbidden(f"As {actor} you can't move an order to {target.value}")
-        _apply(db, order, target, actor, note)
+        if target is OrderStatus.DELIVERED:
+            tries_left = _check_delivery_code(order, delivery_code, settings)
+        if tries_left is None:
+            _apply(db, order, target, actor, note)
+    # Raised only after the commit above: the wrong attempt must be counted, and
+    # raising inside the transaction would roll the count back.
+    if tries_left is not None:
+        raise WrongDeliveryCode(
+            f"That code is wrong. {tries_left} {'try' if tries_left == 1 else 'tries'} left."
+            if tries_left
+            else "Wrong code. This order is now locked; contact support."
+        )
     return order
+
+
+def _check_delivery_code(order: Order, code: str | None, settings: Settings) -> int | None:
+    """None if the rider may mark the order delivered; otherwise the tries left.
+
+    Orders from before Phase 14 have no code and need none.
+    """
+    if order.delivery_code is None:
+        return None
+    if order.delivery_code_attempts >= settings.delivery_code_max_attempts:
+        raise Conflict("Too many wrong codes for this order; contact support")
+    # compare_digest takes the same time however many digits match, so response
+    # timing can't reveal how close a guess was.
+    if code is not None and secrets.compare_digest(code, order.delivery_code):
+        return None
+    order.delivery_code_attempts += 1
+    return settings.delivery_code_max_attempts - order.delivery_code_attempts
 
 
 def cancel(db: Session, order_id: uuid.UUID, user: User, reason: str) -> Order:
@@ -413,5 +464,5 @@ def run_timeouts(db: Session, batch: int = 100) -> TimeoutReport:
             _apply(db, order, OrderStatus.PAYMENT_FAILED, "system", "Payment not completed in time")
         stale = repo.claim_expired(db, OrderStatus.PAID, Order.accept_by, now, batch)
         for order in stale:
-            _apply(db, order, OrderStatus.REJECTED, "system", "Restaurant did not accept in time")
+            _apply(db, order, OrderStatus.REJECTED, "system", AUTO_REJECT_REASON)
     return TimeoutReport(payment_expired=len(unpaid), auto_rejected=len(stale))

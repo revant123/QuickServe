@@ -3,7 +3,19 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    SmallInteger,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, Timestamps, UUIDPrimaryKey
@@ -59,6 +71,19 @@ class Order(UUIDPrimaryKey, Timestamps, Base):
     accept_by: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancel_reason: Mapped[str | None] = mapped_column(String(300))
 
+    # Phase 14: who delivers it. A rider claims an order from the pool once the
+    # restaurant has accepted it, so they ride over while the food is cooked.
+    rider_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    rider_assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # What the rider earns for this order, fixed when they claim it (they see it
+    # before they accept, like the real apps), so a settings change later can't
+    # alter a job someone already took.
+    rider_pay: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    # The 4-digit code the customer reads out at the door. Only the customer
+    # sees it; the rider must type it to mark the order DELIVERED.
+    delivery_code: Mapped[str | None] = mapped_column(String(4))
+    delivery_code_attempts: Mapped[int] = mapped_column(SmallInteger, default=0, server_default=text("0"))
+
     items: Mapped[list["OrderItem"]] = relationship(
         back_populates="order", cascade="all, delete-orphan", lazy="selectin"
     )
@@ -78,6 +103,28 @@ class Order(UUIDPrimaryKey, Timestamps, Base):
         # newest first. The index is already in that order, so there's no sort
         # step, and it replaces the old index on customer_id alone.
         Index("ix_orders_customer_newest", "customer_id", text("created_at DESC")),
+        # Phase 14. One active delivery per rider, enforced by the database: a
+        # partial UNIQUE index only covers rows matching its WHERE clause, so a
+        # rider can have any number of delivered orders but only one in flight.
+        # Two simultaneous claims by the same rider can't both commit.
+        Index(
+            "uq_orders_one_active_delivery_per_rider",
+            "rider_id",
+            unique=True,
+            postgresql_where=text(
+                "rider_id IS NOT NULL AND status IN ('ACCEPTED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY')"
+            ),
+        ),
+        # The riders' pool: accepted orders nobody has claimed yet. A partial
+        # index stays tiny (only the few orders waiting right now), however many
+        # millions of finished orders the table holds.
+        Index(
+            "ix_orders_rider_pool",
+            "created_at",
+            postgresql_where=text("rider_id IS NULL AND status IN ('ACCEPTED', 'PREPARING', 'READY')"),
+        ),
+        # A rider's own history ("delivered today").
+        Index("ix_orders_rider_newest", "rider_id", text("created_at DESC")),
     )
 
 

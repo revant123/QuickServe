@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,6 +38,8 @@ class StatusUpdate(BaseModel):
     # nobody can claim to be "the restaurant" just by typing it.
     status: OrderStatus
     note: str | None = Field(default=None, max_length=300)
+    # Phase 14: required to mark an order DELIVERED. The customer reads it out at the door.
+    delivery_code: str | None = Field(default=None, pattern=r"^[0-9]{4}$")
 
 
 class CancelRequest(BaseModel):
@@ -82,6 +84,10 @@ class OrderOut(BaseModel):
     cancel_reason: str | None
     created_at: datetime
     items: list[OrderItemOut]
+    # Phase 14. Filled in by the router for the viewer: the rider's name for
+    # everyone who can see the order, the delivery code for its customer only.
+    rider_name: str | None = None
+    delivery_code: str | None = None
 
 
 class OrderSummary(BaseModel):
@@ -125,3 +131,91 @@ class QuoteOut(BaseModel):
     item_total: Decimal
     discount: Decimal
     grand_total: Decimal
+
+
+# Phase 14: riders
+
+
+class PoolOrder(BaseModel):
+    """An order waiting for a rider. No customer address until it's claimed."""
+
+    id: uuid.UUID
+    status: OrderStatus
+    restaurant_name: str
+    restaurant_address: str
+    distance_km: Decimal | None
+    item_count: int
+    rider_pay: Decimal
+    created_at: datetime
+
+
+class RiderOrder(BaseModel):
+    """A claimed order, as its rider sees it: both addresses, no prices except their pay."""
+
+    id: uuid.UUID
+    status: OrderStatus
+    restaurant_name: str
+    restaurant_address: str
+    restaurant_latitude: Decimal | None
+    restaurant_longitude: Decimal | None
+    delivery_address: str
+    delivery_latitude: Decimal | None
+    delivery_longitude: Decimal | None
+    distance_km: Decimal | None
+    item_count: int
+    rider_pay: Decimal | None
+    assigned_at: datetime | None
+    created_at: datetime
+
+
+class RiderDay(BaseModel):
+    active: RiderOrder | None
+    delivered_today: list[RiderOrder]
+    deliveries_today: int
+    earnings_today: Decimal
+
+
+# Phase 14: restaurant partners
+
+
+class KitchenItem(BaseModel):
+    name: str
+    quantity: int
+
+
+class KitchenOrder(BaseModel):
+    """One ticket on the restaurant's order board (a KOT, kitchen order ticket)."""
+
+    id: uuid.UUID
+    short_id: str
+    status: OrderStatus
+    created_at: datetime
+    accept_by: datetime | None
+    items: list[KitchenItem]
+    item_total: Decimal
+    packaging_charge: Decimal
+    customer_first_name: str
+    rider_name: str | None
+    cancel_reason: str | None
+
+
+class TopItem(BaseModel):
+    name: str
+    quantity: int
+
+
+class SalesReport(BaseModel):
+    day: date
+    timezone: str
+    orders_delivered: int
+    orders_in_progress: int
+    orders_cancelled: int
+    orders_missed: int  # auto-rejected: nobody accepted in time
+    food_sales: Decimal
+    restaurant_discounts: Decimal
+    commission_percent: Decimal
+    commission: Decimal
+    gst_on_commission: Decimal
+    estimated_payout: Decimal
+    avg_prep_minutes: float | None
+    top_items: list[TopItem]

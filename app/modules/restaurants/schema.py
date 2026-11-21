@@ -45,6 +45,10 @@ class ProfileUpdate(BaseModel):
     avg_prep_minutes: int = Field(ge=5, le=120)
 
 
+class OpenUpdate(BaseModel):
+    is_open: bool
+
+
 class LocationUpdate(BaseModel):
     """For restaurants created before Phase 11, which have no location yet."""
 

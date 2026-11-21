@@ -74,13 +74,21 @@ def test_full_order_journey(client, rider, admin):
     assert client.patch(status_url, json={"status": "ACCEPTED"}, headers=owner_h).json()["status"] == "ACCEPTED"
     assert client.patch(status_url, json={"status": "DELIVERED"}, headers=owner_h).status_code == 403
 
-    # Rider can't see the order until it's READY
+    # Phase 14: the rider sees the order in the pool, without the address, and
+    # sees the order itself only after claiming it
     assert client.get(f"/api/v1/orders/{order['id']}", headers=rider_h).status_code == 404
+    pool = client.get("/api/v1/rider/pool", headers=rider_h).json()
+    assert [p["id"] for p in pool] == [order["id"]] and "delivery_address" not in pool[0]
     for s in ("PREPARING", "READY"):
         client.patch(status_url, json={"status": s}, headers=owner_h)
-    assert client.get(f"/api/v1/orders/{order['id']}", headers=rider_h).status_code == 200
-    for s in ("OUT_FOR_DELIVERY", "DELIVERED"):
-        assert client.patch(status_url, json={"status": s}, headers=rider_h).status_code == 200
+    assert client.post(f"/api/v1/orders/{order['id']}/claim", headers=rider_h).status_code == 200
+    seen_by_rider = client.get(f"/api/v1/orders/{order['id']}", headers=rider_h).json()
+    assert seen_by_rider["delivery_code"] is None and seen_by_rider["rider_name"] == rider.name
+    code = client.get(f"/api/v1/orders/{order['id']}", headers=cust_h).json()["delivery_code"]
+    assert client.patch(status_url, json={"status": "OUT_FOR_DELIVERY"}, headers=rider_h).status_code == 200
+    assert client.patch(status_url, json={"status": "DELIVERED"}, headers=rider_h).status_code == 422  # no code
+    delivered = client.patch(status_url, json={"status": "DELIVERED", "delivery_code": code}, headers=rider_h)
+    assert delivered.status_code == 200
 
     timeline = client.get(f"/api/v1/orders/{order['id']}/timeline", headers=cust_h).json()
     assert [(e["to_status"], e["actor"]) for e in timeline] == [
