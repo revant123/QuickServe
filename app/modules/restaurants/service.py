@@ -21,6 +21,13 @@ def create_restaurant(db: Session, data: RestaurantCreate, owner: User) -> Resta
     return restaurant
 
 
+def get_restaurant(db: Session, restaurant_id: uuid.UUID) -> Restaurant:
+    restaurant = db.get(Restaurant, restaurant_id)
+    if restaurant is None:
+        raise NotFound("Restaurant not found")
+    return restaurant
+
+
 def list_restaurants(db: Session, limit: int, offset: int) -> list[Restaurant]:
     # LIMIT/OFFSET pagination. Every list endpoint is paginated: an unbounded
     # SELECT is a slow query today and an outage once the table is large.

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+# Your own dish photos for local demos (see README, Phase 13). Never committed:
+# photos copied from the web belong to their photographers.
+src/photos/*
+!src/photos/README.md

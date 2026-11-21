@@ -24,6 +24,12 @@ def list_restaurants(limit: int = Query(20, ge=1, le=100), offset: int = Query(0
     return service.list_restaurants(db, limit, offset)
 
 
+@router.get("/{restaurant_id}", response_model=RestaurantOut)
+def get_restaurant(restaurant_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Public. One restaurant, for the app's menu page (a shared link or a refresh lands here first)."""
+    return service.get_restaurant(db, restaurant_id)
+
+
 @router.put("/{restaurant_id}/location", response_model=RestaurantOut)
 def set_location(
     restaurant_id: uuid.UUID,

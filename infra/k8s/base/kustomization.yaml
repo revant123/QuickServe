@@ -22,6 +22,7 @@ resources:
   - api.yaml
   - worker.yaml
   - notifier.yaml
+  - web.yaml # the customer app (Phase 13)
 
 # Local-only credentials, the same ones as docker-compose.yml. Kustomize adds a
 # hash to the Secret's name, so changing a value creates a new Secret and the

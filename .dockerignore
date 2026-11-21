@@ -45,3 +45,6 @@ Dockerfile
 
 # Terraform code is not part of the app image
 infra/
+
+# The customer app has its own image (frontend/Dockerfile)
+frontend/

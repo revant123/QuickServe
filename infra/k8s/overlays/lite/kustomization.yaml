@@ -17,6 +17,9 @@ images:
   - name: quickserve
     newName: ghcr.io/revant123/quickserve
     newTag: main
+  - name: quickserve-app # the customer app (Phase 13)
+    newName: ghcr.io/revant123/quickserve-app
+    newTag: main
 
 patches:
   - path: pull-always.yaml # same reason as overlays/local

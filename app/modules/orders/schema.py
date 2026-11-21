@@ -80,7 +80,20 @@ class OrderOut(BaseModel):
     paid_at: datetime | None
     accept_by: datetime | None
     cancel_reason: str | None
+    created_at: datetime
     items: list[OrderItemOut]
+
+
+class OrderSummary(BaseModel):
+    """One row of "My orders": enough for the list, without every bill line."""
+
+    id: uuid.UUID
+    restaurant_id: uuid.UUID
+    restaurant_name: str
+    status: OrderStatus
+    grand_total: Decimal
+    item_count: int
+    created_at: datetime
 
 
 class StatusEventOut(BaseModel):

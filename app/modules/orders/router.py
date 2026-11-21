@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database.session import get_db
@@ -10,6 +10,7 @@ from app.modules.orders.schema import (
     CancelRequest,
     OrderCreate,
     OrderOut,
+    OrderSummary,
     QuoteOut,
     StatusEventOut,
     StatusUpdate,
@@ -24,6 +25,17 @@ router = APIRouter(tags=["orders"])
 def place_order(body: OrderCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Customers only. The order belongs to the logged-in customer."""
     return service.place_order(db, body, user)
+
+
+@router.get("/orders", response_model=list[OrderSummary])
+def my_orders(
+    limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(Role.CUSTOMER)),
+):
+    """Customers only: your own orders, newest first (the app's "My orders" screen)."""
+    return service.list_my_orders(db, user, limit, offset)
 
 
 @router.post("/orders/quote", response_model=QuoteOut)

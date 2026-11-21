@@ -99,5 +99,16 @@ done
 echo "   ok: $limited of 75 requests were stopped by Envoy (429) before reaching the API"
 echo "   (logins through the gateway are limited for the next minute)"
 
+echo "7. The customer app (Phase 13) on the same hostname: / to the app, /api to the API"
+headers=$(c "$HOST" "$HTTPS" -D - -o "$tmp/index.html" "https://$HOST:$HTTPS/orders/123")
+grep -q '<div id="root">' "$tmp/index.html"
+grep -qi '^content-security-policy: default-src' <<<"$headers"
+grep -qi '^strict-transport-security: max-age=' <<<"$headers"
+asset=$(grep -o '/assets/index-[^"]*\.js' "$tmp/index.html" | head -1)
+cache=$(c "$HOST" "$HTTPS" -D - -o /dev/null "https://$HOST:$HTTPS$asset" | grep -i '^cache-control' || true)
+grep -qi 'immutable' <<<"$cache" || { echo "   asset cache header: $cache"; exit 1; }
+c "$HOST" "$HTTPS" "https://$HOST:$HTTPS/api/v1/pricing" | grep -q '"platform_fee"'
+echo "   ok: the app's page (with CSP), its assets cached for a year, and /api still reaching the API"
+
 echo
 echo "Front door OK."
