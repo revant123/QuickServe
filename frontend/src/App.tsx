@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router'
 import { useAuth } from './auth/AuthProvider'
 import { homeFor } from './auth/RequireRole'
+import { DESKTOP, useMediaQuery } from './lib/media'
 import { RequireAuth } from './auth/RequireAuth'
 import { BottomNav, Loading } from './components/ui'
 import { HomePage } from './pages/HomePage'
@@ -32,11 +33,13 @@ const NotFoundPage = lazy(() => import('./pages/NotFoundPage').then((m) => ({ de
 function Shell() {
   const { pathname } = useLocation()
   const { user } = useAuth()
+  const wide = useMediaQuery(DESKTOP)
   // Restaurant partners and riders have their own apps, as on Zomato and Swiggy.
   const home = homeFor(user?.role)
   if (home !== '/') return <Navigate to={home} replace />
-  // The bottom bar would sit on top of the checkout button and the menu's cart bar.
-  const showNav = !pathname.startsWith('/r/') && pathname !== '/cart'
+  // On a phone the menu and cart hide the bottom tabs, which would sit on top of
+  // the cart bar. On a desktop they're a side rail that costs no vertical space.
+  const showNav = wide || (!pathname.startsWith('/r/') && pathname !== '/cart')
   return (
     <div className="app">
       <ArtDefs />

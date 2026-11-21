@@ -13,7 +13,7 @@ export function OffersPage() {
   const offers = useOffers(restaurant.id)
 
   return (
-    <main className="stack">
+    <main className="stack offers">
       <p className="muted small">
         Offers you create here are <strong>funded by you</strong>: the discount comes out of your payout, as on Zomato and Swiggy. Platform offers (like WELCOME50)
         are paid for by QuickServe.

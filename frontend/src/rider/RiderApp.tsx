@@ -69,7 +69,7 @@ export function RiderHome() {
       ) : pool.data.length === 0 ? (
         <p className="empty">No orders waiting right now. This list refreshes every 10 seconds.</p>
       ) : (
-        <ul className="plain-list" aria-label="Orders waiting for a rider">
+        <ul className="plain-list job-grid" aria-label="Orders waiting for a rider">
           {pool.data.map((p) => (
             <li key={p.id}>
               <PoolCard order={p} />

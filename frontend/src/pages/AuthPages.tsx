@@ -40,7 +40,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="page">
+    <div className="page auth">
       <TopBar title="Log in" />
       <main className="stack">
         <form className="panel panel-body form" onSubmit={submit} noValidate>
@@ -109,7 +109,7 @@ export function RegisterPage() {
   }
 
   return (
-    <div className="page">
+    <div className="page auth">
       <TopBar title="Create account" />
       <main className="stack">
         <form className="panel panel-body form" onSubmit={submit}>
@@ -154,7 +154,7 @@ export function ProfilePage() {
   const navigate = useNavigate()
   if (!loggedIn) return <Navigate to="/login?next=/profile" replace />
   return (
-    <div className="page">
+    <div className="page auth">
       <TopBar title="Profile" back={false} />
       <main className="stack">
         <section className="panel panel-body">

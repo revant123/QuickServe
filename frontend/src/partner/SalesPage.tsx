@@ -12,7 +12,7 @@ export function SalesPage() {
   const best = useBestSellers(restaurant.id)
 
   return (
-    <main className="stack">
+    <main className="stack sales">
       <div className="row between">
         <label htmlFor="sales-day" className="small">
           Day
