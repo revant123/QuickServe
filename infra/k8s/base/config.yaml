@@ -15,3 +15,7 @@ data:
   # the request comes from this network (the pod network of minikube and kind,
   # where Envoy runs). See app/core/client_ip.py for why only the last entry.
   TRUSTED_PROXY_CIDRS: "10.244.0.0/16"
+  # Phase 15: spans go to Jaeger (infra/k8s/tracing). OpenTelemetry's standard
+  # variable names: another backend is a one-line change here.
+  TRACING_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318

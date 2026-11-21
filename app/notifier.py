@@ -36,6 +36,9 @@ import time
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+from opentelemetry import trace
+from opentelemetry.instrumentation.utils import suppress_instrumentation
+
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, log_event
 from app.core.metrics import (
@@ -48,8 +51,9 @@ from app.core.metrics import (
     after_commit,
     start_metrics_server,
 )
+from app.core.tracing import configure_tracing, continue_trace
 from app.database import models  # noqa: F401  (registers every model with SQLAlchemy)
-from app.database.session import SessionLocal, transaction
+from app.database.session import SessionLocal, engine, transaction
 from app.modules.menu.repository import db_now
 from app.modules.notifications.service import handle_event
 from app.modules.outbox import service as outbox
@@ -76,7 +80,11 @@ def run_once(settings: Settings | None = None) -> RelayReport:
     """Handle one batch of outbox events. Returns what happened."""
     settings = settings or get_settings()
     report = RelayReport()
-    with SessionLocal() as db, transaction(db):
+    # Polling runs every second whether or not there's work. Traced, that would
+    # be ~86,000 near-empty traces a day of "SELECT ... FOR UPDATE SKIP LOCKED".
+    # So instrumentation is suppressed for the polling, and only the handling of
+    # a real event is traced, as part of the trace that produced the event.
+    with suppress_instrumentation(), SessionLocal() as db, transaction(db):
         now = db_now(db)
         # Claim again after each round: an order's next event becomes claimable
         # once the one before it is published (within this same transaction).
@@ -93,7 +101,25 @@ def run_once(settings: Settings | None = None) -> RelayReport:
 def _handle_round(db, claimed: list, now, settings: Settings, report: RelayReport) -> None:
     for event in claimed:
         try:
-            with db.begin_nested():  # SAVEPOINT: a failure undoes only this event
+            # Continue the trace of the request that wrote the event (Phase 15).
+            # A "consumer" span: Jaeger shows it under the producer's spans, after
+            # a gap that is exactly how long the event waited in the outbox.
+            with (
+                continue_trace(
+                    event.trace_parent,
+                    f"process {event.event_type}",
+                    kind=trace.SpanKind.CONSUMER,
+                    attributes={
+                        "messaging.system": "quickserve.outbox",
+                        "messaging.operation.type": "process",
+                        "messaging.destination.name": "outbox_events",
+                        "messaging.message.id": str(event.id),
+                        "quickserve.event.attempt": event.attempts + 1,
+                        "quickserve.event.wait_ms": round((now - event.created_at).total_seconds() * 1000),
+                    },
+                ),
+                db.begin_nested(),  # SAVEPOINT: a failure undoes only this event
+            ):
                 created = handle_event(db, event)
             event.published_at = now
             report.published += 1
@@ -132,7 +158,7 @@ def _count(report: RelayReport) -> None:
 def housekeeping(settings: Settings | None = None) -> int:
     """Update the backlog gauges and delete delivered events past retention."""
     settings = settings or get_settings()
-    with SessionLocal() as db, transaction(db):
+    with suppress_instrumentation(), SessionLocal() as db, transaction(db):
         now = db_now(db)
         deleted = outbox.delete_published_before(db, now - timedelta(days=settings.outbox_retention_days))
         pending, oldest_age, dead = outbox.backlog(db, now)
@@ -193,6 +219,7 @@ def main() -> None:
         sys.exit(0 if healthcheck(settings.notifier_metrics_port, max_age, HEARTBEAT_METRIC) else 1)
 
     configure_logging()
+    configure_tracing("quickserve-notifier", engine=engine)
     if args.once:
         report = run_once(settings)
         housekeeping(settings)

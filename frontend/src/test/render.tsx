@@ -30,7 +30,7 @@ export function renderAt(path: string, routes: { path: string; element: ReactEle
   )
 }
 
-type Handler = (url: URL, request: Request) => { status?: number; body: unknown } | undefined
+type Handler = (url: URL, request: Request) => { status?: number; body: unknown; headers?: Record<string, string> } | undefined
 
 /** A fake API: each handler returns a response for the URLs it knows. Records every request. */
 export function fakeApi(handler: Handler) {
@@ -47,7 +47,10 @@ export function fakeApi(handler: Handler) {
     calls.push({ method: request.method, path: url.pathname + url.search, body })
     const res = handler(url, request)
     if (!res) return new Response(JSON.stringify({ detail: 'Not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } })
-    return new Response(JSON.stringify(res.body), { status: res.status ?? 200, headers: { 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify(res.body), {
+      status: res.status ?? 200,
+      headers: { 'Content-Type': 'application/json', ...(res.headers ?? {}) },
+    })
   })
   vi.stubGlobal('fetch', fetchMock)
   return { calls, fetchMock }

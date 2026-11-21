@@ -13,6 +13,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from opentelemetry import trace
 from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -112,6 +113,7 @@ def claim(db: Session, order_id: uuid.UUID, rider: User, settings: Settings | No
     and changes nothing.
     """
     settings = settings or get_settings()
+    span = trace.get_current_span()
     try:
         with transaction(db):
             claimed = db.execute(
@@ -121,7 +123,9 @@ def claim(db: Session, order_id: uuid.UUID, rider: User, settings: Settings | No
                 .returning(Order.id)
             ).scalar_one_or_none()
             if claimed is None:
+                span.set_attribute("quickserve.claim", "lost")
                 raise _why_not_claimable(db, order_id, rider)
+            span.set_attribute("quickserve.claim", "won")
             order = db.get(Order, order_id, populate_existing=True)
             _publish_assigned(db, order, rider)
     except IntegrityError as exc:

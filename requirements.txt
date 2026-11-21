@@ -15,3 +15,12 @@ python-multipart==0.0.34  # lets FastAPI read the login form (OAuth2 password fl
 redis==8.1.0              # cache, rate limits, logout deny list
 prometheus-client==0.26.0 # /metrics for Prometheus (Phase 7b)
 tzdata==2026.6            # time zones for surge hours (Asia/Kolkata), even in slim images (Phase 11)
+# Tracing (Phase 15): OpenTelemetry API + SDK, the OTLP exporter over HTTP
+# (lighter than the gRPC one: no grpcio, a ~10 MB wheel), and automatic spans
+# for FastAPI requests and Redis commands. SQL spans are QuickServe's own
+# (app/core/tracing.py): the official SQLAlchemy instrumentation stops at 2.0.
+opentelemetry-api==1.45.2
+opentelemetry-sdk==1.45.2
+opentelemetry-exporter-otlp-proto-http==1.45.2
+opentelemetry-instrumentation-fastapi==0.66b2
+opentelemetry-instrumentation-redis==0.66b2

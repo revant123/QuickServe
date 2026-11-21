@@ -8,6 +8,7 @@ resources:
   - ../../monitoring
   - ../../gateway # HTTPS front door (Phase 9); needs infra/k8s/addons.sh first
   - ../../network-policies # who may talk to whom (Phase 10)
+  - ../../tracing # Jaeger: traces (Phase 15)
 
 images:
   - name: quickserve

@@ -185,6 +185,13 @@ jobs:
             | python3 -c 'import sys, json; d = json.load(sys.stdin); assert d["total"] >= 3, d; print("restaurants via the app:", d["total"])'
           test "$(docker compose --profile app exec -T web id -u)" = "101"   # nginx not as root
 
+      - name: Tracing, one order from the API through the outbox to the notifier (Phase 15)
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do curl -fsS -o /dev/null http://localhost:16686/ && break; sleep 2; done
+          python3 scripts/trace_check.py --api http://localhost:8001 --jaeger http://localhost:16686 | tee trace.txt
+          { echo "### One order's trace"; echo '```'; cat trace.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Worker stops cleanly on SIGTERM
         run: |
           docker compose --profile app stop worker

@@ -10,7 +10,7 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, lazyload
 
 from app.core.config import Settings
 from app.core.exceptions import Conflict, NotFound
@@ -40,7 +40,10 @@ def pay(
 
     Only the customer who placed the order can pay for it.
     """
-    order = db.get(Order, order_id)
+    # Only the owner is checked here, so don't load the order's items: the
+    # relationship is eager (selectin), and a trace showed order_items being read
+    # twice per payment, here and again under the lock below (Phase 15).
+    order = db.get(Order, order_id, options=[lazyload(Order.items)])
     if order is None or order.customer_id != customer.id:
         raise NotFound("Order not found")
 

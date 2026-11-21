@@ -53,6 +53,7 @@ spec:
   dnsNames:
     - quickserve.localhost
     - grafana.quickserve.localhost
+    - jaeger.quickserve.localhost # Phase 15
   duration: 2160h # 90 days, like Let's Encrypt
   renewBefore: 720h # renew with 30 days left
   privateKey:

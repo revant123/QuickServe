@@ -1,0 +1,22 @@
+# Tracing (Phase 15): Jaeger v2, one small pod (receive, tail-sample, store in
+# memory, show). Included by every overlay, lite too: it needs ~100 MB, and
+# traces are the quickest way to see where a slow request spent its time.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: quickserve
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: quickserve
+    includeSelectors: false
+
+resources:
+  - jaeger.yaml
+
+# The same file Docker Compose mounts. The hash in the ConfigMap's name restarts
+# Jaeger when the file changes.
+configMapGenerator:
+  - name: jaeger-config
+    files:
+      - config.yaml=jaeger-config.yaml

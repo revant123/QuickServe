@@ -7,6 +7,7 @@ resources:
   - ../../base
   - ../../gateway
   - ../../network-policies
+  - ../../tracing # Jaeger (Phase 15): small enough for lite
 
 components:
   - ../../components/lite

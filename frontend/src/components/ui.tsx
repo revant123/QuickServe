@@ -3,6 +3,7 @@ import { Link, NavLink, useNavigate } from 'react-router'
 import { useCart } from '../cart/CartProvider'
 import { estimatedItemTotal, itemCount } from '../cart/cart'
 import { rupees } from '../lib/money'
+import { ApiError } from '../api/client'
 import { RegionStrip } from '../theme/Art'
 
 export function VegMark({ veg }: { veg: boolean }) {
@@ -107,9 +108,17 @@ export function Loading({ label = 'Loading' }: { label?: string }) {
 
 export function ErrorBox({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const message = error instanceof Error ? error.message : 'Something went wrong.'
+  // For server errors, the trace ID: quoted in a support ticket, it opens the
+  // exact request in Jaeger. (Errors are always kept by the tail sampler.)
+  const reference = error instanceof ApiError && error.status >= 500 ? error.traceId : null
   return (
     <div className="error-box" role="alert">
       <p>{message}</p>
+      {reference && (
+        <p className="reference">
+          Reference: <code>{reference}</code>
+        </p>
+      )}
       {onRetry && (
         <button type="button" className="btn ghost" onClick={onRetry}>
           Try again

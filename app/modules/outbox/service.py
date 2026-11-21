@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import and_, delete, exists, func, select
 from sqlalchemy.orm import Session, aliased
 
+from app.core.tracing import current_traceparent
 from app.modules.outbox.model import OutboxEvent
 
 
@@ -13,7 +14,11 @@ def record(db: Session, event_type: str, aggregate_type: str, aggregate_id: uuid
     """Add an event to the CURRENT transaction. It becomes visible only if the
     caller's transaction commits, together with the change it describes."""
     event = OutboxEvent(
-        event_type=event_type, aggregate_type=aggregate_type, aggregate_id=aggregate_id, payload=payload
+        event_type=event_type,
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id,
+        payload=payload,
+        trace_parent=current_traceparent(),  # None when there's no trace (tracing off, or a script)
     )
     db.add(event)
     return event

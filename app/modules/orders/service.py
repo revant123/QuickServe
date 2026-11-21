@@ -7,6 +7,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from opentelemetry import trace
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -31,6 +32,7 @@ from app.core.metrics import (
     after_commit,
 )
 from app.core.money import rupees
+from app.core.tracing import tracer
 from app.database.session import transaction
 from app.modules.coupons import service as coupons
 from app.modules.coupons.model import Coupon
@@ -90,9 +92,24 @@ def _qty_by_item(data: OrderCreate) -> dict[uuid.UUID, int]:
 def _bill(
     restaurant: Restaurant, item_total, conditions: Conditions, coupon: Coupon | None, settings: Settings
 ) -> Bill:
-    return price(
-        item_total, restaurant.packaging_charge, conditions, settings, coupons.terms(coupon) if coupon else None
-    )
+    # A "business" span (Phase 15): automatic spans show HTTP and SQL; this one
+    # shows the pricing step and the numbers that explain a surprising bill.
+    # Only amounts and reasons: never names, addresses or phone numbers.
+    with tracer.start_as_current_span("pricing.bill") as span:
+        bill = price(
+            item_total, restaurant.packaging_charge, conditions, settings, coupons.terms(coupon) if coupon else None
+        )
+        span.set_attributes(
+            {
+                "quickserve.item_total": float(item_total),
+                "quickserve.grand_total": float(bill.grand_total),
+                "quickserve.distance_km": float(conditions.distance_km),
+                "quickserve.surge_reasons": ",".join(bill.surge_reasons) or "none",
+                "quickserve.raining": conditions.raining,
+                "quickserve.coupon_applied": coupon is not None,
+            }
+        )
+        return bill
 
 
 def quote(db: Session, data: OrderCreate, customer: User, settings: Settings | None = None) -> tuple[Bill, str | None]:
@@ -128,6 +145,7 @@ def quote(db: Session, data: OrderCreate, customer: User, settings: Settings | N
             return _bill(restaurant, item_total, conditions, coupon, settings), None
         except CouponRejected as exc:
             coupon_error = exc.message
+            trace.get_current_span().add_event("coupon rejected", {"quickserve.reason": exc.message})
     return _bill(restaurant, item_total, conditions, None, settings), coupon_error
 
 

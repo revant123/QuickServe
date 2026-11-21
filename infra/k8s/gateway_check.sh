@@ -110,5 +110,31 @@ grep -qi 'immutable' <<<"$cache" || { echo "   asset cache header: $cache"; exit
 c "$HOST" "$HTTPS" "https://$HOST:$HTTPS/api/v1/pricing" | grep -q '"platform_fee"'
 echo "   ok: the app's page (with CSP), its assets cached for a year, and /api still reaching the API"
 
+echo "8. Tracing (Phase 15): Envoy starts the trace, the API continues it, Jaeger has both"
+trace_id=$(c "$HOST" "$HTTPS" -D - -o /dev/null "https://$HOST:$HTTPS/api/v1/restaurants/near?lat=30.7333&lng=76.7794" \
+  | tr -d '\r' | awk -F': ' 'tolower($1) == "x-trace-id" {print $2}')
+[[ -n "$trace_id" ]] || { echo "   no X-Trace-Id header: is TRACING_ENABLED on?"; exit 1; }
+found=
+for _ in $(seq 1 30); do # the tail sampler waits 10 s for a trace to finish, then batches
+  c "jaeger.$HOST" "$HTTPS" -o "$tmp/trace.json" "https://jaeger.$HOST:$HTTPS/api/traces/$trace_id" 2>/dev/null || true
+  if found=$(python3 - "$tmp/trace.json" <<'PY'
+import json, sys
+try:
+    t = json.load(open(sys.argv[1]))["data"][0]
+except Exception:
+    sys.exit(1)
+services = sorted({p["serviceName"] for p in t["processes"].values()})
+sql = sum(1 for s in t["spans"] if any(tag["key"] == "db.system.name" for tag in s.get("tags", [])))
+if "quickserve-api" in services and len(services) >= 2 and sql:
+    print(f"{len(t['spans'])} spans from {', '.join(services)}; {sql} SQL")
+else:
+    sys.exit(1)
+PY
+  ); then break; fi
+  sleep 2
+done
+[[ -n "$found" ]] || { echo "   trace $trace_id never showed Envoy + API + SQL in Jaeger"; cat "$tmp/trace.json" | head -c 500; exit 1; }
+echo "   ok: trace $trace_id: $found"
+
 echo
 echo "Front door OK."

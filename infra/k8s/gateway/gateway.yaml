@@ -13,6 +13,26 @@ kind: EnvoyProxy
 metadata:
   name: quickserve-proxy
 spec:
+  # Phase 15: Envoy starts each trace. It creates the first span (time spent
+  # at the gateway, TLS included), adds a traceparent header, and the API
+  # continues the same trace. Spans go to Jaeger over OTLP/gRPC.
+  telemetry:
+    tracing:
+      # Head sampling: trace every request at the edge. The tail sampler in
+      # Jaeger then keeps all errors and slow requests, and a share of the rest.
+      # On a busy site you'd lower this to cut CPU and network, e.g. 10.
+      samplingRate: 100
+      provider:
+        type: OpenTelemetry
+        backendRefs:
+          - name: jaeger
+            namespace: quickserve
+            port: 4317
+      customTags:
+        gateway:
+          type: Literal
+          literal:
+            value: quickserve
   provider:
     type: Kubernetes
     kubernetes:
