@@ -113,6 +113,33 @@ describe('OrdersBoard', () => {
   })
 })
 
+describe('OrdersBoard on a desktop', () => {
+  afterEach(() => {
+    // @ts-expect-error: back to jsdom's default (no matchMedia)
+    delete window.matchMedia
+  })
+
+  it('shows New, Preparing and Ready side by side instead of tabs', async () => {
+    window.matchMedia = ((query: string) => ({
+      matches: query === '(min-width: 1024px)',
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia
+    baseApi((url) =>
+      url.pathname === '/api/v1/restaurants/r1/orders'
+        ? { body: [ticket({}), ticket({ id: 'cccccccc-0000-0000-0000-00000000d00d', short_id: 'D00D', status: 'PREPARING', accept_by: null })] }
+        : undefined,
+    )
+    renderAt('/partner', [{ path: '/partner', element: <WithRestaurant><OrdersBoard /></WithRestaurant> }])
+    const fresh = await screen.findByRole('region', { name: /^New/ })
+    expect(within(fresh).getByRole('article', { name: '#BEEF' })).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: /^Preparing/ })).getByRole('article', { name: '#D00D' })).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: /^Ready/ })).getByText('Nothing here.')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Live orders/ })).toHaveTextContent('2')
+  })
+})
+
 describe('Menu and sales', () => {
   it('switches a dish off until a time', async () => {
     const item = {

@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, GitHub Actions; React + TypeScript apps for customers, restaurants and riders (Vite, TanStack Query) served by nginx. **271 backend tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages, plus **48 frontend tests** and end-to-end browser journeys.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, GitHub Actions; React + TypeScript apps for customers, restaurants and riders (Vite, TanStack Query) served by nginx. **271 backend tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages, plus **49 frontend tests** and end-to-end browser journeys.
 
 ---
 
@@ -2955,6 +2955,22 @@ Mostly choosing standard building blocks and measuring contrast:
 
 Those are checks, not an audit. A screen-reader pass with VoiceOver or TalkBack is still to do.
 
+### Q: How does the same app work on a phone and on a laptop?
+
+At first it didn't: on a laptop, the whole app sat in a 480 px phone column in the middle of the screen. Now the layout responds to the window's width with CSS **media queries** [124]. The styles are written **mobile first**: the phone layout is the default, and `@media (min-width: ...)` blocks add to it as the screen gets wider, the approach MDN's media query guide teaches [126]. So a phone downloads no desktop rules it has to undo.
+
+| Width | Layout |
+|---|---|
+| under 720 px (phones) | one column, bottom tabs, the cart bar along the bottom |
+| 720 to 1023 px (tablets, half a laptop screen) | a wider column; restaurants and dishes two to a row |
+| 1024 px and up (laptops, desktops) | full width with a centred 1180 px content area; the bottom tabs become a **side rail** on the left; restaurants in a grid, the menu two dishes to a row; cart and order pages with the bill in a second column that stays in view; the restaurant's order board shows **New, Preparing and Ready side by side**, like a kitchen display |
+
+A few details are worth knowing:
+- **One navigation element, two looks.** The side rail is the same `<nav>` as the phone's bottom tabs, restyled. It has the same links and focus order, and screen readers hear the same thing. To make that work, the number of tabs moved from an inline grid style into a CSS variable (`--nav-items`), because an inline style would beat the desktop stylesheet.
+- **Two columns without two versions of the page.** The cart and order pages wrap their content in `col-main` and `col-side`. On a phone both wrappers are `display: contents`, so their children join the single column as if the wrappers weren't there. On a desktop they become a grid. `display: contents` has a history of hiding elements from screen readers, but the reported problems are with elements that carry meaning (buttons, headings, lists, tables) [125]. The wrappers here are plain `<div>`s with no meaning to lose.
+- **When CSS isn't enough.** Three columns of orders versus tabs is a different set of elements, not just different styles. So `useMediaQuery('(min-width: 1024px)')` (built on `window.matchMedia` and React's `useSyncExternalStore`) chooses which one to render, and re-renders if the window is resized. A test pretends to be a desktop to check the three columns.
+- **Nothing extra to download.** The responsive rules add 4.6 KB of CSS before compression (under 2 KB gzipped). The JavaScript first load is 108.0 KB, still within the 150 KB budget.
+
 ### Q: The app needed two new endpoints. What are they?
 
 - **`GET /api/v1/orders`**: the customer's own orders, newest first, with the restaurant's name and the number of dishes. It's the "My orders" screen.
@@ -3798,3 +3814,6 @@ Business and tax figures change often; the dates show when each was reported.
 121. Ridesharing Driver, *Amazon OTP password* (three incorrect codes prevent completing the delivery). https://www.ridesharingdriver.com/amazon-otp-password/
 122. UrbanPiper API documentation, *Aggregator constraints: Zomato* (rider OTP for pickup). https://api-docs.urbanpiper.com/downstream/aggregator-constraints/zomato
 123. Eternal (Zomato), *Online ordering terms for restaurant partners* (definition of Gross Sales). https://www.eternal.com/policies/online-ordering/
+124. web.dev, *Learn Responsive Design: Media queries*. https://web.dev/learn/design/media-queries
+125. Adrian Roselli, *It's Mid-2022 and Browsers (Mostly Safari) Still Break Accessibility via Display Properties* (which elements lose their meaning with `display: contents`). https://adrianroselli.com/2022/07/its-mid-2022-and-browsers-mostly-safari-still-break-accessibility-via-display-properties.html
+126. MDN Web Docs, *Media query fundamentals* (mobile-first design and choosing breakpoints). https://developer.mozilla.org/en-US/docs/Learn/CSS/CSS_layout/Media_queries

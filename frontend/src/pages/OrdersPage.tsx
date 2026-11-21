@@ -9,7 +9,7 @@ export function OrdersPage() {
   const { loggedIn } = useAuth()
   const orders = useMyOrders(loggedIn)
   return (
-    <div className="page">
+    <div className="page narrow">
       <TopBar title="My orders" back={false} />
       <main className="stack">
         {orders.isPending && <Loading label="Loading your orders" />}

@@ -6,6 +6,7 @@ import type { OrderStatus } from '../api/types'
 import { ErrorBox, Loading } from '../components/ui'
 import { rupees } from '../lib/money'
 import { STATUS_LABEL } from '../lib/status'
+import { DESKTOP, useMediaQuery } from '../lib/media'
 import { ago, countdown, secondsLeft, useNow } from '../lib/time'
 import { useCurrentRestaurant } from './PartnerApp'
 
@@ -34,6 +35,9 @@ export function OrdersBoard() {
   const past = useBoard(restaurant.id, 'recent', tab === 'past')
   const now = useNow(1000)
   const [rejecting, setRejecting] = useState<Ticket | null>(null)
+  // On a counter tablet in landscape or a laptop, the kitchen sees all three
+  // live columns at once, like a KDS (kitchen display screen); on a phone, tabs.
+  const wide = useMediaQuery(DESKTOP)
 
   const tickets = active.data ?? []
   const count = (t: Tab) => tickets.filter((o) => TABS.find((x) => x.id === t)!.statuses.includes(o.status)).length
@@ -47,6 +51,72 @@ export function OrdersBoard() {
       document.title = before
     }
   }, [newCount])
+
+  if (wide) {
+    const showPast = tab === 'past'
+    return (
+      <main className="stack board-wide">
+        <div className="row between">
+          <div className="tabs two" role="tablist" aria-label="Orders">
+            <button type="button" role="tab" aria-selected={!showPast} className="tab" onClick={() => setTab('new')}>
+              Live orders
+              {tickets.length > 0 && <span className={`badge ${newCount > 0 ? 'hot' : ''}`}>{tickets.length}</span>}
+            </button>
+            <button type="button" role="tab" aria-selected={showPast} className="tab" onClick={() => setTab('past')}>
+              Past
+            </button>
+          </div>
+          {!restaurant.is_open && <p className="notice small">Not accepting new orders. Orders already placed still need finishing.</p>}
+        </div>
+        {showPast ? (
+          past.isPending ? (
+            <Loading label="Loading orders" />
+          ) : past.isError ? (
+            <ErrorBox error={past.error} onRetry={() => past.refetch()} />
+          ) : (past.data ?? []).length === 0 ? (
+            <p className="empty">Nothing here.</p>
+          ) : (
+            <ul className="plain-list ticket-grid" aria-label="Past orders">
+              {past.data.map((o) => (
+                <li key={o.id}>
+                  <TicketCard ticket={o} now={now} onReject={() => setRejecting(o)} />
+                </li>
+              ))}
+            </ul>
+          )
+        ) : active.isPending ? (
+          <Loading label="Loading orders" />
+        ) : active.isError ? (
+          <ErrorBox error={active.error} onRetry={() => active.refetch()} />
+        ) : (
+          <div className="kanban">
+            {TABS.filter((t) => t.id !== 'past').map((t) => {
+              const column = tickets.filter((o) => t.statuses.includes(o.status))
+              return (
+                <section key={t.id} className={`kanban-col ${t.id}`} aria-labelledby={`col-${t.id}`}>
+                  <h2 id={`col-${t.id}`} className="kanban-title">
+                    {t.label} <span className={`badge ${t.id === 'new' && column.length ? 'hot' : ''}`}>{column.length}</span>
+                  </h2>
+                  {column.length === 0 ? (
+                    <p className="empty small">{t.id === 'new' ? 'New orders appear here within 10 seconds.' : 'Nothing here.'}</p>
+                  ) : (
+                    <ul className="plain-list" aria-label={`${t.label} orders`}>
+                      {column.map((o) => (
+                        <li key={o.id}>
+                          <TicketCard ticket={o} now={now} onReject={() => setRejecting(o)} />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              )
+            })}
+          </div>
+        )}
+        <RejectDialog ticket={rejecting} onClose={() => setRejecting(null)} />
+      </main>
+    )
+  }
 
   const shown = tab === 'past' ? (past.data ?? []) : tickets.filter((o) => TABS.find((x) => x.id === tab)!.statuses.includes(o.status))
   const query = tab === 'past' ? past : active

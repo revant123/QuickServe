@@ -73,126 +73,131 @@ export function OrderPage() {
   return (
     <div className="page order">
       <TopBar title="Your order" />
-      <main className="stack">
-        <section className="panel">
-          <div className="panel-body">
-            <p className="eyebrow">{STATUS_LABEL[o.status]}</p>
-            <h2 className="section-title">Order #{o.id.slice(0, 8)}</h2>
-            <Link to={`/r/${o.restaurant_id}`} className="small">
-              View the restaurant
-            </Link>
-            {ended ? (
-              <p className="notice">{ended}</p>
-            ) : (
-              <ol className="steps" aria-label="Order progress">
-                {STEPS.map((s, i) => (
-                  <li key={s.status} className={i < reached ? 'done' : i === reached ? 'now' : ''} aria-current={i === reached ? 'step' : undefined}>
-                    {s.label}
+      <main className="stack two-col">
+        <div className="col-main">
+          <section className="panel">
+            <div className="panel-body">
+              <p className="eyebrow">{STATUS_LABEL[o.status]}</p>
+              <h2 className="section-title">Order #{o.id.slice(0, 8)}</h2>
+              <Link to={`/r/${o.restaurant_id}`} className="small">
+                View the restaurant
+              </Link>
+              {ended ? (
+                <p className="notice">{ended}</p>
+              ) : (
+                <ol className="steps" aria-label="Order progress">
+                  {STEPS.map((s, i) => (
+                    <li key={s.status} className={i < reached ? 'done' : i === reached ? 'now' : ''} aria-current={i === reached ? 'step' : undefined}>
+                      {s.label}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          </section>
+
+          {o.delivery_code && WITH_CODE.has(o.status) && (
+            <section className="panel code-panel" aria-labelledby="code-title">
+              <div className="panel-body">
+                <h2 id="code-title" className="section-title">
+                  Delivery code
+                </h2>
+                <p className="delivery-code" aria-label={`Delivery code ${o.delivery_code.split('').join(' ')}`}>
+                  {o.delivery_code}
+                </p>
+                <p className="muted small">
+                  {o.rider_name ? `${o.rider_name} is delivering your order. ` : ''}Tell this code to your delivery partner at the door, after you have the food. Never
+                  share it on a phone call.
+                </p>
+              </div>
+            </section>
+          )}
+
+          {o.status === 'PLACED' && (
+            <section className="panel" aria-labelledby="pay-title">
+              <div className="panel-body">
+                <h2 id="pay-title" className="section-title">
+                  Pay {rupees(o.grand_total)}
+                </h2>
+                <p className="muted small">
+                  Payments are simulated (Phase 4). Pay by {new Date(o.pay_by).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}, or the
+                  order is cancelled and the dishes go back on sale.
+                </p>
+                {lastPayment?.status === 'FAILED' && (
+                  <p className="form-error" role="alert">
+                    Payment declined{lastPayment.failure_reason ? `: ${lastPayment.failure_reason}` : ''}. You can try again.
+                  </p>
+                )}
+                {pay.isError && <ErrorBox error={pay.error} />}
+                <div className="row">
+                  <button type="button" className="btn" onClick={() => pay.mutate('success')} disabled={pay.isPending}>
+                    {pay.isPending ? 'Paying…' : `Pay ${rupees(o.grand_total)}`}
+                  </button>
+                  <button type="button" className="btn ghost" onClick={() => pay.mutate('failure')} disabled={pay.isPending}>
+                    Try a declined card
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
+
+        </div>
+
+        <div className="col-side">
+          <section className="panel" aria-labelledby="items-title">
+            <div className="panel-body">
+              <h2 id="items-title" className="section-title">
+                Bill
+              </h2>
+              <dl className="bill-lines">
+                {o.items.map((it) => (
+                  <div key={it.menu_item_id}>
+                    <dt>
+                      {it.item_name} × {it.quantity}
+                    </dt>
+                    <dd>{rupees(it.line_total)}</dd>
+                  </div>
+                ))}
+                <BillRow label="Packaging" amount={o.packaging_charge} />
+                <BillRow label="Delivery fee" amount={o.delivery_fee} />
+                <BillRow label="Small order fee" amount={o.small_order_fee} />
+                <BillRow label={`Surge${o.surge_reasons ? ` (${o.surge_reasons.replace(',', ', ')})` : ''}`} amount={o.surge_fee} />
+                <BillRow label="Platform fee" amount={o.platform_fee} />
+                <BillRow label={`Discount${o.coupon_code ? ` (${o.coupon_code})` : ''}`} amount={o.discount} negative />
+                <BillRow label="GST on food" amount={o.gst_food} />
+                <BillRow label="GST on fees" amount={o.gst_fees} />
+                <div className="total">
+                  <dt>Total</dt>
+                  <dd>{rupees(o.grand_total)}</dd>
+                </div>
+              </dl>
+              <p className="muted small">Deliver to: {o.delivery_address}</p>
+            </div>
+          </section>
+
+          {(o.status === 'PLACED' || o.status === 'PAID') && (
+            <button type="button" className="btn ghost danger" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
+              {cancel.isPending ? 'Cancelling…' : o.status === 'PAID' ? 'Cancel order (full refund)' : 'Cancel order'}
+            </button>
+          )}
+          {cancel.isError && <ErrorBox error={cancel.error} />}
+
+          {o.status === 'DELIVERED' && <ReviewForm orderId={o.id} restaurantId={o.restaurant_id} />}
+
+          {timeline.data && timeline.data.length > 0 && (
+            <details className="panel">
+              <summary className="panel-body">Timeline</summary>
+              <ul className="plain-list timeline">
+                {timeline.data.map((ev) => (
+                  <li key={`${ev.to_status}-${ev.created_at}`}>
+                    <time dateTime={ev.created_at}>{new Date(ev.created_at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}</time>{' '}
+                    {STATUS_LABEL[ev.to_status]} <span className="muted small">({ev.actor})</span>
                   </li>
                 ))}
-              </ol>
-            )}
-          </div>
-        </section>
-
-        {o.delivery_code && WITH_CODE.has(o.status) && (
-          <section className="panel code-panel" aria-labelledby="code-title">
-            <div className="panel-body">
-              <h2 id="code-title" className="section-title">
-                Delivery code
-              </h2>
-              <p className="delivery-code" aria-label={`Delivery code ${o.delivery_code.split('').join(' ')}`}>
-                {o.delivery_code}
-              </p>
-              <p className="muted small">
-                {o.rider_name ? `${o.rider_name} is delivering your order. ` : ''}Tell this code to your delivery partner at the door, after you have the food. Never
-                share it on a phone call.
-              </p>
-            </div>
-          </section>
-        )}
-
-        {o.status === 'PLACED' && (
-          <section className="panel" aria-labelledby="pay-title">
-            <div className="panel-body">
-              <h2 id="pay-title" className="section-title">
-                Pay {rupees(o.grand_total)}
-              </h2>
-              <p className="muted small">
-                Payments are simulated (Phase 4). Pay by {new Date(o.pay_by).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}, or the
-                order is cancelled and the dishes go back on sale.
-              </p>
-              {lastPayment?.status === 'FAILED' && (
-                <p className="form-error" role="alert">
-                  Payment declined{lastPayment.failure_reason ? `: ${lastPayment.failure_reason}` : ''}. You can try again.
-                </p>
-              )}
-              {pay.isError && <ErrorBox error={pay.error} />}
-              <div className="row">
-                <button type="button" className="btn" onClick={() => pay.mutate('success')} disabled={pay.isPending}>
-                  {pay.isPending ? 'Paying…' : `Pay ${rupees(o.grand_total)}`}
-                </button>
-                <button type="button" className="btn ghost" onClick={() => pay.mutate('failure')} disabled={pay.isPending}>
-                  Try a declined card
-                </button>
-              </div>
-            </div>
-          </section>
-        )}
-
-        <section className="panel" aria-labelledby="items-title">
-          <div className="panel-body">
-            <h2 id="items-title" className="section-title">
-              Bill
-            </h2>
-            <dl className="bill-lines">
-              {o.items.map((it) => (
-                <div key={it.menu_item_id}>
-                  <dt>
-                    {it.item_name} × {it.quantity}
-                  </dt>
-                  <dd>{rupees(it.line_total)}</dd>
-                </div>
-              ))}
-              <BillRow label="Packaging" amount={o.packaging_charge} />
-              <BillRow label="Delivery fee" amount={o.delivery_fee} />
-              <BillRow label="Small order fee" amount={o.small_order_fee} />
-              <BillRow label={`Surge${o.surge_reasons ? ` (${o.surge_reasons.replace(',', ', ')})` : ''}`} amount={o.surge_fee} />
-              <BillRow label="Platform fee" amount={o.platform_fee} />
-              <BillRow label={`Discount${o.coupon_code ? ` (${o.coupon_code})` : ''}`} amount={o.discount} negative />
-              <BillRow label="GST on food" amount={o.gst_food} />
-              <BillRow label="GST on fees" amount={o.gst_fees} />
-              <div className="total">
-                <dt>Total</dt>
-                <dd>{rupees(o.grand_total)}</dd>
-              </div>
-            </dl>
-            <p className="muted small">Deliver to: {o.delivery_address}</p>
-          </div>
-        </section>
-
-        {(o.status === 'PLACED' || o.status === 'PAID') && (
-          <button type="button" className="btn ghost danger" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
-            {cancel.isPending ? 'Cancelling…' : o.status === 'PAID' ? 'Cancel order (full refund)' : 'Cancel order'}
-          </button>
-        )}
-        {cancel.isError && <ErrorBox error={cancel.error} />}
-
-        {o.status === 'DELIVERED' && <ReviewForm orderId={o.id} restaurantId={o.restaurant_id} />}
-
-        {timeline.data && timeline.data.length > 0 && (
-          <details className="panel">
-            <summary className="panel-body">Timeline</summary>
-            <ul className="plain-list timeline">
-              {timeline.data.map((ev) => (
-                <li key={`${ev.to_status}-${ev.created_at}`}>
-                  <time dateTime={ev.created_at}>{new Date(ev.created_at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}</time>{' '}
-                  {STATUS_LABEL[ev.to_status]} <span className="muted small">({ev.actor})</span>
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
+              </ul>
+            </details>
+          )}
+        </div>
       </main>
     </div>
   )

@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react'
+import { type ReactNode, type CSSProperties } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router'
 import { useCart } from '../cart/CartProvider'
 import { estimatedItemTotal, itemCount } from '../cart/cart'
@@ -173,7 +173,9 @@ export function BottomNav({ items = NAV, label = 'Main' }: { items?: NavItem[]; 
   // The first item is the section's home: only an exact match marks it active.
   const home = items[0]?.to
   return (
-    <nav aria-label={label} className="bottom-nav" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}>
+    // The item count goes in a CSS variable, not an inline grid template, so the
+    // desktop stylesheet can turn this bar into a side rail.
+    <nav aria-label={label} className="bottom-nav" style={{ '--nav-items': items.length } as CSSProperties}>
       {items.map((n) => (
         <NavLink key={n.to} to={n.to} end={n.to === home}>
           <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

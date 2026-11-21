@@ -35,7 +35,7 @@ export function MenuManager() {
       <p className="muted small">
         Stock counts what you've prepared this cycle. A restock closes the cycle and keeps its numbers, so best sellers and restock suggestions get better over time.
       </p>
-      <ul className="plain-list" aria-label="Dishes">
+      <ul className="plain-list admin-grid" aria-label="Dishes">
         {menu.data.map((item) => (
           <li key={item.id}>
             <MenuRow item={item} onRestock={() => setRestocking(item)} />
