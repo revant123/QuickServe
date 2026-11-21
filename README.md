@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, GitHub Actions. **204 tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, GitHub Actions; a React + TypeScript customer app (Vite, TanStack Query) served by nginx. **250 backend tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages, plus **38 frontend tests** and an end-to-end browser journey.
 
 ---
 
@@ -36,6 +36,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
    - [Network policies (Phase 10)](#network-policies-phase-10)
    - [Pricing like Zomato and Swiggy (Phase 11)](#pricing-like-zomato-and-swiggy-phase-11)
    - [Discovery: near me, search and ratings (Phase 12)](#discovery-near-me-search-and-ratings-phase-12)
+   - [Customer app (Phase 13)](#customer-app-phase-13)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -238,6 +239,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| Customer app (Phase 13) | [Customer app Q&A](#customer-app-phase-13); `frontend/` (React + TypeScript, types generated from `frontend/openapi.json`, nginx with CSP and cache headers), `infra/k8s/base/web.yaml`, the `web` route in `infra/k8s/gateway/routes.yaml`, `GET /orders` and `GET /restaurants/{id}`, `tests/test_openapi_contract.py`, `tests/test_app_endpoints.py`, the `frontend` job in CI |
 | Discovery: near me, search, ratings (Phase 12) | [Discovery Q&A](#discovery-near-me-search-and-ratings-phase-12); `app/modules/discovery/` (near me, ETA, Bayesian rating, search), `app/modules/reviews/`, `app/modules/pricing/geo.py` (bounding box), `tests/test_discovery.py`, `tests/test_reviews.py` |
 | Pricing, coupons and surge (Phase 11) | [Pricing Q&A](#pricing-like-zomato-and-swiggy-phase-11); `app/modules/pricing/` (calculator, geo, rain switch), `app/modules/coupons/`, `POST /orders/quote`, `tests/test_pricing.py`, `tests/test_checkout.py` |
 | Network policies (Phase 10) | [Network policy Q&A](#network-policies-phase-10); `infra/k8s/network-policies/`, `infra/k8s/netpol_check.sh`, `infra/k8s/smoke.sh` |
@@ -263,6 +265,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Payments | Mock gateway, idempotency keys, one-success-per-order rule, refunds on rejection/cancellation | Real gateway, webhooks |
 | Background jobs | A separate worker (`python -m app.worker`) expires unpaid orders and auto-rejects orders the restaurant didn't accept, every 30 seconds; safe to run several (`FOR UPDATE SKIP LOCKED`); graceful shutdown | |
 | Caching, logs and metrics | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses; Prometheus metrics (RED + business), 6 tested alert rules, a Grafana dashboard with cost per order; Alertmanager emails with grouping, inhibition and a Watchdog; a rightsizing report priced in USD | Tracing, real cost data (OpenCost) |
+| Customer app | React + TypeScript app for the whole customer journey, served by nginx through the Gateway, typed from the OpenAPI contract | Notifications in the app, `httpOnly` cookie login, push updates instead of polling |
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
 | DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), Kubernetes manifests deployed and tested on a kind cluster in every CI run (rolling update with zero failed requests), liveness/readiness checks, pinned and locked dependencies, an HTTPS front door (Gateway API with Envoy Gateway, certificates from cert-manager, host routing, an edge rate limit), network policies (default deny, one allow-list per component, enforcement proven in CI) | Applying the Terraform to a real AWS account, mTLS between pods |
 
@@ -2754,6 +2757,260 @@ To write a review yourself, take an order through to `DELIVERED` as in Phase 3 (
 
 ---
 
+### Customer app (Phase 13)
+
+Until now QuickServe was an API you could only use through Swagger. Phase 13 adds the app a customer actually holds: a phone-sized website in `frontend/`, built with React and TypeScript. It covers the whole customer journey, and every screen talks to the same API the tests use:
+
+- **Home:** restaurants that deliver to you (Phase 12's `/restaurants/near`), sorted by rating, distance or delivery time, with region filters and "what are you craving?" shortcuts.
+- **Search:** dishes and restaurants near you, with Phase 12's typo handling ("Showing close matches for *paner*").
+- **Menu:** the restaurant's dishes with veg marks, stock badges ("Only 3 left") and ADD buttons.
+- **Cart and checkout:** the bill comes from `POST /orders/quote` (Phase 11), coupons included. If the price changes before you pay, the app shows the new total instead of charging it.
+- **Order:** pay (the mock gateway, with a "simulate failure" button), then watch the status move from *Placed* to *Delivered*, cancel while that's allowed, see the itemised bill and the timeline, and review the order once it's delivered.
+- **My orders, login, sign-up, profile.**
+
+It's served by its own small container (nginx) on the **same address as the API**: `https://quickserve.localhost:8443/` is the app, and `https://quickserve.localhost:8443/api/...` is the API. The Gateway from Phase 9 sends each path to the right place.
+
+The look is a royal Indian menu card: ivory paper, maroon and gold, a carved arch over every restaurant, and a border that changes with the restaurant's region (Rajasthani block print, Gujarati bandhani, a South Indian temple border, a Northeast handloom weave, Punjabi phulkari). The why and how are below.
+
+### Q: Why React, TypeScript and Vite?
+
+- **React** because it's what most frontend job descriptions ask for, and its model (the screen is a function of the data) fits an app that is mostly "show what the server says". React 19 is the current version.
+- **TypeScript** because the frontend's biggest risk is calling the API wrongly: a field renamed, a number that's actually a string. TypeScript catches those while you type, and the next question shows how the types come straight from the backend.
+- **Vite** as the build tool. During development it serves your source files to the browser almost as they are, so changes show up instantly. For production it bundles and minifies everything into a few files with a content hash in each name [109].
+
+Next.js was the main alternative. It renders pages on a server, which matters for Google search ranking. A food app's restaurant pages could use that, but QuickServe has no SEO needs, and a static site means one tiny nginx container instead of another Node.js server to run, monitor and pay for.
+
+### Q: How does the frontend know what the API looks like?
+
+From the API itself. FastAPI already writes an OpenAPI description of every endpoint (it's what Swagger shows). Phase 13 adds a pipeline around it:
+
+```mermaid
+flowchart LR
+    A["FastAPI routes<br/>and Pydantic schemas"] --> B["scripts/export_openapi.py<br/>writes frontend/openapi.json"]
+    B --> C["openapi-typescript<br/>writes src/api/schema.d.ts"]
+    C --> D["openapi-fetch client<br/>api.GET('/api/v1/orders/{order_id}')"]
+```
+
+`openapi-typescript` turns the description into TypeScript types [110], and `openapi-fetch` uses those types to check every call. A wrong path, a missing parameter or a misspelt field is a compile error:
+
+```ts
+const { data } = await api.GET('/api/v1/orders/{order_id}', { params: { path: { order_id: id } } })
+data.grand_total   // string, because money comes as a decimal string
+data.grand_totl    // error: Property 'grand_totl' does not exist
+```
+
+Two checks keep the three files in step:
+- **Backend:** `tests/test_openapi_contract.py` fails if the committed `openapi.json` differs from what the app generates now. Change a schema and forget to export it, and the backend tests tell you.
+- **Frontend:** `npm run check:api` fails if `schema.d.ts` wasn't regenerated from that `openapi.json`.
+
+So a change on one side can't silently break the other. CI runs both.
+
+### Q: Where does the app keep data from the server?
+
+In TanStack Query's cache, not in hand-written state. Its documentation makes a distinction that's worth learning: **server state** (restaurants, menus, orders) lives on the server, can be changed by other people and goes out of date. **Client state** (is this dialog open, what's typed in the search box) belongs to the browser alone [101]. Tools like Redux treat both the same way, so you end up writing your own loading flags, error handling and refetch logic. TanStack Query does that part: it caches each response under a key, removes duplicate requests, retries, and refetches when the data is "stale".
+
+How stale each kind of data may get is a business decision, so it's set per query in `src/api/queries.ts`:
+
+| Data | Fresh for | Why |
+|---|---|---|
+| Restaurant details, reviews, coupons | 5 minutes | rarely change |
+| Restaurants near you, search | 1 minute | open/closed and ETAs drift |
+| Menu | 30 seconds | stock badges ("Only 3 left") go stale fastest |
+| An active order | refetched every 5 seconds | the customer is watching it |
+| A finished order | never refetched | delivered is final |
+
+Query keys start with `'public'` for data that's the same for everyone. At logout the app removes everything else (your orders, your profile), so the next person on a shared phone can't see it.
+
+### Q: Why poll for order status every 5 seconds instead of using WebSockets?
+
+Because polling is the simplest thing that works at this scale, and it stops by itself. The app polls only while the order is in an active state, and only while the page is open. A delivered, cancelled or rejected order isn't polled at all.
+
+The cost is easy to count: one small `GET` every 5 seconds per customer watching an order, which is 12 requests a minute, each a primary-key lookup. A push channel (server-sent events or WebSockets) would deliver changes instantly and send nothing when nothing changes. It also needs connections that stay open for the length of a delivery, through Envoy, through the network policies and across pod restarts. That's a good later phase, and the outbox from Phase 8 already produces exactly the events it would push.
+
+### Q: Where does the cart live, and can it get the price wrong?
+
+The cart lives in the browser (`localStorage`), like Swiggy's and Zomato's: one restaurant at a time, at most 20 of each dish. Adding a dish from a second restaurant asks whether to start a new cart.
+
+The cart shows an **estimate** while you shop, calculated in whole paise so ₹0.10 + ₹0.20 is exactly ₹0.30, not 0.30000000000000004. The estimate never becomes the bill. The checkout screen asks the server for a quote (`POST /orders/quote`) and shows only that: item total, fees, discount and GST, exactly as Phase 11 calculates them. When you tap "Place order", the app sends back the total you saw as `expected_total`. If the server's own calculation differs (a price changed, surge started, a coupon ran out), it refuses with `409`, and the app shows the new total and asks you to confirm again. The general rule from Phase 11, applied: **never trust a price that came from the client.**
+
+One case surfaced during end-to-end testing. `WELCOME50` is for a customer's first order only. On the second run of the test journey, the quote correctly said the coupon didn't apply, but the app still sent it with the order, and the order was refused. Now a coupon the quote refuses isn't sent, and the screen says why with a "Remove" button. A test covers it.
+
+### Q: Tapping "Pay" twice, or paying on a bad network: can it charge twice?
+
+No, because the app uses the idempotency key from Phase 4 the way it was designed. It makes **one key per payment attempt** (`crypto.randomUUID()`), not one per tap:
+
+- If the request fails **because of the network**, the app keeps the key. You don't know whether the payment went through, so tapping again sends the same key, and the server returns the first payment instead of making a second.
+- If the server **answered** (a decline, say), the attempt is over, so the next tap gets a new key and really is a new attempt.
+
+### Q: Where should the login token be stored in the browser?
+
+There's no perfect answer. These are the trade-offs:
+
+| Where | Can JavaScript read it? | Risk |
+|---|---|---|
+| `localStorage` | yes | stays forever; any injected script can steal it |
+| `sessionStorage` | yes | same XSS risk, but gone when the tab closes |
+| JavaScript variable | yes | lost on every refresh |
+| `httpOnly` cookie | **no** | safe from XSS theft, but needs CSRF protection |
+
+OWASP advises against putting sensitive data like tokens in `localStorage`, and suggests `sessionStorage` when the data doesn't need to outlive the tab [96]. Its testing guide is blunt that a token in either one can be read by any script running on the page [97]. The strongest option is an `httpOnly` cookie, which JavaScript can't read at all. It needs backend changes, though: setting the cookie at login, CSRF protection, and keeping the existing `Authorization` header working for Swagger and the tests.
+
+QuickServe uses **`sessionStorage`** for now, and makes injected scripts as unlikely as possible:
+- **A strict Content Security Policy** on every page: scripts, fonts and requests may only come from QuickServe's own address [105]. Even if someone managed to inject a `<script>` tag, the browser wouldn't load code from another site or send the token anywhere else.
+- **No HTML from data.** React escapes text by default, and the app never puts API data into raw HTML. The only raw HTML is the SVG art, which is constant strings in the source code.
+- **Short-lived tokens** (30 minutes) and logout that really revokes the token (Phase 4).
+
+Moving to `httpOnly` cookies is listed as a next step.
+
+### Q: After logging in, the app returns you to the page you came from. Is that safe?
+
+Only because the destination is checked. `/login?next=/cart` sends you to the cart after login. Without a check, an attacker could send people a link like `/login?next=https://evil.example` that shows the real QuickServe login and then forwards them to a fake site. OWASP calls these unvalidated redirects [102]. `safeNext()` only accepts paths on this site: a single leading `/`, not `//evil.example` (which browsers treat as another site) and not `/\evil.example`. Anything else goes to the home page. It has its own tests.
+
+### Q: Why serve the app and the API from the same address?
+
+Because then the browser treats them as one site, and a whole category of problems disappears. If the app were on `app.quickserve.localhost` and the API on `api.quickserve.localhost`, every API call would be a cross-origin request. The API would need CORS headers [106], and the browser would send an extra `OPTIONS` "preflight" request before most calls, so many API calls would cost two round trips.
+
+Instead the Gateway routes by path:
+
+```
+https://quickserve.localhost:8443/            -> web (nginx, the app's files)
+https://quickserve.localhost:8443/api/...     -> api (FastAPI)
+                                  /health, /docs, /redoc, /openapi.json -> api
+```
+
+Docker Compose has no Gateway, so there the app's nginx forwards `/api/` to the API itself, using one extra config file mounted into the container (`infra/compose/web-api-proxy.conf`). The image is the same in both places.
+
+The network policies from Phase 10 got one more rule: only the Gateway may reach the `web` pods, and `web` may not connect to anything except DNS. It serves files and never needs to call out. `netpol_check.sh` proves both in CI.
+
+### Q: How does caching work for the app's files?
+
+Two rules, which web.dev recommends together [98]:
+
+| File | `Cache-Control` | Why |
+|---|---|---|
+| `/assets/index-DVfRVUwh.js` and other hashed files | `public, max-age=31536000, immutable` | the name changes whenever the content does, so a cached copy can never be wrong |
+| `index.html` | `no-cache` | it lists the current hashed files, so the browser must check it every time |
+
+`immutable` tells the browser not to recheck the file even when the user presses reload [99]. A returning customer downloads only `index.html` (under 1 KB) plus whatever changed in the last deploy.
+
+That's also the FinOps angle. When QuickServe goes live (Phase 16), these headers let a CDN like CloudFront serve the assets from its edge cache for a year. The origin, our server, would then serve almost nothing but a sub-1 KB HTML file per visit, and data transfer is one of the line items on a cloud bill that grows with traffic.
+
+One nginx detail is worth knowing. An `add_header` inside a `location` block **replaces** all the `add_header` lines from the outer level instead of adding to them [111]. So the security headers live in one file that every location includes. (Recent nginx versions add an `add_header_inherit merge` switch for this; the include works on any version.) CI checks that the CSP header is present on the HTML **and** on the hashed assets.
+
+### Q: How big is the app, and why does that matter?
+
+On a mid-range phone on a 4G connection, every kilobyte of JavaScript has to be downloaded, then parsed and run, and nothing works until it has been. So the build has a **performance budget**: a limit that fails CI if it's exceeded [100]. The budget is 150 KB of gzipped JavaScript before the first screen works (web.dev gives "less than 170 KB of JavaScript on mobile" as an example budget).
+
+Measured on this build:
+
+```
+   17.4 KB  assets/index-....js             the app's own code for the first screens
+   89.2 KB  assets/vendor-....js            React, React Router, TanStack Query (changes rarely)
+    0.4 KB  assets/rolldown-runtime-....js
+  106.9 KB  first-load JavaScript (gzipped), budget 150 KB
+```
+
+Two choices keep it there:
+- **Code splitting.** The cart, order, login and profile screens load only when you open them (`React.lazy`), so the home screen doesn't wait for checkout code.
+- **A separate vendor file.** Libraries change much less often than the app's code. Kept in their own file, they stay cached across most deploys.
+
+`scripts/check-size.mjs` prints this table into every CI run's summary. If a change adds a heavy library, the build fails and the pull request shows by how much.
+
+### Q: Where does the royal theme come from?
+
+From Indian textiles and menu cards, drawn entirely in code. Each restaurant gets a regional accent picked from its `cuisines` (the field added in Phase 12):
+
+| Region | Border | Inspired by |
+|---|---|---|
+| Rajasthani | four-petal block print, red on ivory | Sanganeri hand block printing, from Sanganer near Jaipur, known for fine prints on white and off-white cloth [107] |
+| Gujarati | white dots on red | bandhani tie-dye |
+| South Indian | gold triangles on green | the temple border on Kanchipuram-style silk saris |
+| Northeast | red diamonds on black | handloom shawl bands |
+| North Indian | orange diamonds on maroon | phulkari, Punjab's "flower work" embroidery, stitched as geometric motifs [108] |
+| Mixed or unknown | gold zari | the gold thread border of a formal sari |
+
+`regionFor()` picks a region only when **exactly one** matches. A "North Indian, South Indian" restaurant gets the plain zari border, because guessing one region for a mixed menu would be wrong for half of it. The seed adds three restaurants so every border appears: Marwar Rasoi (Rajasthani), Kathiyawadi Thaal (Gujarati) and Seven Sisters Kitchen (Northeast).
+
+Everything decorative (the borders, the arch, the dish drawings of a thali, dosa, momos and so on) is SVG, written once into the page and reused. There are no image downloads for decoration, so it costs almost nothing in the size budget. The two fonts (Rozha One for headings, Mukta for text, which also covers Devanagari) are bundled with the app instead of loaded from Google Fonts. That keeps the CSP strict and means no third party sees who opens the app.
+
+### Q: Why aren't there real food photos in the repository?
+
+Because photos are someone's work, and this repository is public. The food photos used in the design mock-ups came from Pinterest and food blogs. Pinning a photo on Pinterest doesn't give anyone a licence to republish it, and one of them even carried a blog's watermark. Committing them to a public repository, or serving them from a public website, would be republishing someone else's photos without permission.
+
+So the app works either way:
+- **By default** every dish shows its SVG drawing.
+- **For local development**, put photos into `frontend/src/photos/` named after the dish (`dal-makhani.webp`). The app picks them up with `import.meta.glob` and shows them instead of the drawing. That folder is in `.gitignore` (except its README), and `frontend/.dockerignore` keeps it out of images too.
+
+To ship real photos later: take them yourself, use a licence that allows it (Unsplash and Pexels have permissive licences), or, like the real apps, show photos the restaurants upload of their own food.
+
+### Q: What did accessibility take?
+
+Mostly choosing standard building blocks and measuring contrast:
+- **Contrast.** WCAG 1.4.3 asks for at least 4.5:1 between normal text and its background [103]. Every regional accent passes on the ivory paper: the lowest is Rajasthani red at about 6:1. Gold (#C9A03C) only scores about 2.3:1 on ivory, so it's used for borders and ornaments, never text. Gold-coloured text uses a darker gold (#7A5A12, 5.9:1).
+- **Tap targets** are at least 44 × 44 pixels, WCAG's enhanced target size [104]. The ADD buttons and steppers are thumb-sized.
+- **Native elements.** Dialogs (pick a location, replace the cart) use the HTML `<dialog>` element, which traps focus and closes on Escape by itself. Every input has a label, the veg and non-veg marks have text alternatives, and the bottom navigation is a real `<nav>` with links.
+- **Not only colour.** Each order step keeps its text label, and the current one is marked with `aria-current="step"` and bold text, so a screen reader and a colour-blind customer both know where the order is.
+
+Those are checks, not an audit. A screen-reader pass with VoiceOver or TalkBack is still to do.
+
+### Q: The app needed two new endpoints. What are they?
+
+- **`GET /api/v1/orders`**: the customer's own orders, newest first, with the restaurant's name and the number of dishes. It's the "My orders" screen.
+- **`GET /api/v1/restaurants/{id}`**: one restaurant, for a menu page opened from a link (before this, you could only find a restaurant through a list).
+
+The orders list is a classic N+1 trap: list the orders, then for each one fetch its restaurant's name and count its items. With 20 orders, that's 41 queries. `list_my_orders()` gets everything in **one** query: a JOIN for the restaurant name and a correlated subquery for the item count. A test counts the SQL statements and fails if there's more than one.
+
+It also got an index that matches the query exactly: `(customer_id, created_at DESC)`. PostgreSQL finds the customer's rows and reads them already in the right order, so there's no sort step, and with `LIMIT 20` it stops after 20 rows. This index replaces the old single-column index on `customer_id`, because any query that used the old one can use the new one's first column. Keeping both would make every new order update two indexes for no gain. The migration creates the new index **before** dropping the old one, so there's never a moment with neither.
+
+### Q: How is the frontend tested?
+
+At three levels, plus **6 new backend tests** (250 in total): the two OpenAPI contract checks, and `tests/test_app_endpoints.py` for my orders (sorted, names and counts, exactly one query, 401/403/422) and the restaurant detail with its 404.
+
+- **38 unit and component tests** (Vitest with Testing Library, in a simulated browser):
+  - region picking and dish drawings;
+  - the cart's rules and paise arithmetic;
+  - the API client's token and 401 handling;
+  - the home page with a fake API;
+  - the checkout screen, including the `409` price change and the refused coupon.
+- **An end-to-end journey** run against the real API in a real Chrome at phone size (390 × 844): home → menu → search → login → cart → place order → pay → my orders, with a check that the browser console stays free of errors.
+- **CI** (the new `frontend` job): `npm ci`, the API types check, the TypeScript compiler, ESLint, the tests, the production build and the size budget. The `docker` job builds the nginx image and checks that the container runs as the unprivileged user, sends the right cache and CSP headers, answers `/orders/123` with the app (not a 404) and reaches the API through its proxy. The `kubernetes` jobs deploy it to kind behind the Gateway and run the network policy checks.
+
+### Q: How do I try it?
+
+After merging, deploy as usual, then run the seed again to add the three new regional restaurants.
+
+**Lightest on a Mac: Docker Compose.**
+
+```bash
+docker compose --profile app up -d --build
+docker compose --profile app run --rm migrate python -m scripts.seed
+```
+
+Open http://localhost:8002 and use **"Fill in the demo customer"** on the login screen.
+
+**Kubernetes:** `infra/k8s/deploy.sh` now deploys `web` too. Open https://quickserve.localhost:8443/ through the same port-forward as Phase 9.
+
+**Working on the frontend itself** (with the API running on port 8001):
+
+```bash
+cd frontend
+npm ci
+npm run dev        # http://localhost:5180, changes show up instantly
+npm test           # the 38 tests
+```
+
+The app starts at Sector 22, Chandigarh. Tap the location at the top to switch to Sector 35, Phase 7 Mohali or your real location (rounded to about 10 m before it's sent).
+
+### Q: What's not built yet?
+
+- **Notifications in the app.** The API has them (Phase 8); the app doesn't show them yet.
+- **`httpOnly` cookie login** instead of `sessionStorage` (see the token question above).
+- **Push updates** (server-sent events) instead of polling.
+- **Restaurant and rider screens** are Phase 14.
+- **An installable app** (a PWA with an offline menu) and real photos, as above.
+
+---
+
 ## 9. DevOps already in the project
 
 ### Q: Why do the tests use a real PostgreSQL instead of SQLite?
@@ -2935,6 +3192,8 @@ These are real, and they make better interview stories than any feature list.
 
 **8. A check that failed because the app got busier (Phase 12).** The CI step `docker compose logs notifier | grep -q "notifier started"` had passed for months. Then the Phase 12 seed started making real orders, so the notifier logged about 150 more lines, and the step failed with exit code 255 even though the line was there. `grep -q` stops reading at the first match. `docker compose logs` then writes into a closed pipe and fails, and `set -o pipefail` reports the failure of any command in the pipeline. With short logs, everything fit in the pipe's buffer before grep exited, so the bug stayed hidden. Even on this branch it passed once and failed twice, depending on how many notifications had been sent by the time the step ran: a timing-dependent failure that looked like a flaky CI run until it was read properly. You can see it in one line: `set -o pipefail; seq 1 200000 | grep -q "^1$"` exits with 141. **Fix:** write the logs to a file, then grep the file. The lesson: **a check can depend on the size of its input. Watch for `| grep -q` and `| head` under pipefail.**
 
+**9. Four files that were never committed (Phase 13).** Everything passed locally: the frontend's 38 tests, the type check, the build. On CI the type check failed at once with "Cannot find module '../lib/money'". The repository's `.gitignore` started from the standard Python template, which ignores `lib/` (a folder Python packaging tools create). Without a leading `/`, a `.gitignore` pattern matches a folder of that name **at any depth**, so `frontend/src/lib/` was silently ignored. `git status` didn't list the four files as new, because ignored files are hidden. **Fix:** `/lib/` and `/lib64/`, so the rule only covers the repository root, and checking the change in a fresh `git clone` before pushing. The lesson: **"works on my machine" can mean "exists only on my machine". Build from a clean clone, as CI does.**
+
 ---
 
 ## 12. Project structure and API
@@ -2977,10 +3236,19 @@ quickserve/
 ├── migrations/                   Alembic env + versions
 ├── scripts/
 │   ├── seed.py                   demo data
+│   ├── export_openapi.py         writes frontend/openapi.json (the frontend's API contract)
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        244 tests, real PostgreSQL and Redis
+├── tests/                        250 tests, real PostgreSQL and Redis
+├── frontend/                     customer app (Phase 13): React + TypeScript (Vite)
+│   ├── src/api/                  openapi-fetch client, generated schema.d.ts, TanStack Query hooks
+│   ├── src/pages/                home, search, menu, cart, order, my orders, login
+│   ├── src/theme/                regional borders and dish drawings (SVG), region picker
+│   ├── src/cart/, src/auth/      cart rules (paise maths), login state
+│   ├── openapi.json              the API contract, exported by scripts/export_openapi.py
+│   ├── Dockerfile, nginx.conf    static files on nginx-unprivileged; CSP and cache headers
+│   └── scripts/check-size.mjs    150 KB JavaScript budget, enforced in CI
 ├── infra/                        Terraform for AWS (Phase 6); start with infra/README.md
 │   ├── k8s/                      Kubernetes (Phase 7): base/ manifests, overlays/ (lite = Mac default, local = full,
 │   │                             ci, ci-lite), components/lite, deploy.sh,
@@ -2994,7 +3262,7 @@ quickserve/
 │   ├── envs/dev/                 network, database, secrets, app server (+ tests/)
 │   └── modules/                  budget, network, database, app_server (each with tests/)
 ├── docs/docker.md                the Dockerfile explained line by line
-├── .github/workflows/ci.yml      five jobs: test, docker, publish (ghcr.io), terraform, kubernetes (kind)
+├── .github/workflows/ci.yml      six jobs: test, frontend, docker, publish (two images to ghcr.io), terraform, kubernetes (kind)
 ├── Dockerfile                    two-stage image, runs as user "app"
 ├── .dockerignore                 keeps venv/, .git/, tests and .env out of the image
 ├── docker-compose.yml            db + redis; profile "app" adds migrate, api, worker
@@ -3015,6 +3283,7 @@ quickserve/
 | POST | `/users` | anyone | Sign up as customer, restaurant owner or rider |
 | GET | `/users/me` | logged in | Who am I? |
 | GET | `/restaurants` | anyone | List restaurants (paginated) |
+| GET | `/restaurants/{id}` | anyone | One restaurant (for a menu page opened from a link) |
 | GET | `/restaurants/near?lat=&lng=&sort=` | anyone | Restaurants that deliver here, with distance, ETA, fee and rating; sort by `distance`, `rating` or `eta`; `cuisine`, `min_rating` filters |
 | GET | `/search?q=&lat=&lng=` | anyone | Dishes and restaurants that deliver here; typo-tolerant |
 | PUT | `/restaurants/{id}/profile` | owner | Cuisines and usual prep time |
@@ -3029,6 +3298,7 @@ quickserve/
 | GET | `/menu/{id}/restock-suggestion` | owner | Suggested quantity, with reasons |
 | GET | `/restaurants/{id}/best-sellers?days=7` | owner | Ranked report |
 | POST | `/orders` | customer | Place an order (reserves stock, all or nothing) |
+| GET | `/orders?limit=&offset=` | customer | Your orders, newest first, with restaurant name and item count (one query) |
 | GET | `/orders/{id}`, `/orders/{id}/timeline` | its customer, owner, rider (once READY), admin | Order with bill; status history |
 | PATCH | `/orders/{id}/status` | owner, rider, admin | Status changes allowed for your role |
 | POST | `/orders/{id}/cancel` | its customer (before acceptance), admin | Cancel with a reason |
@@ -3062,8 +3332,8 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **10. Network policies** (done) | Default deny in and out, DNS allowed, one allow-list per component (PostgreSQL only from the apps, Redis only from the API, the API only from the gateway, no internet for the apps); smoke tests in their own labelled pods; a check that makes real allowed and forbidden connections, with positive controls, in CI on every PR | Zero trust inside the cluster, least privilege, egress control, namespaceSelector + podSelector, proving enforcement |
 | **11. Pricing** (done) | Distance-based delivery fee (haversine x detour index, slabs, radius), free delivery for big orders nearby, small order fee, peak / late-night / rain surge (rain is an admin switch that expires), coupons (percent with cap, flat, minimums, first order, per-customer and total limits, platform- or restaurant-funded) with race-safe redemption, GST after discount, `POST /orders/quote` and `expected_total` | Pure functions for business rules, atomic counters and row locks, CHECK constraints as a safety net, time zones, price-change protection |
 | **12. Discovery** (done) | Restaurants near me (bounding box on an index, then the exact distance checkout uses), delivery time from Swiggy's max(first mile, prep) + last mile, sort by distance / time / Bayesian-average rating, cuisine and rating filters; dish and restaurant search with full-text, trigram and typo fallback; reviews only for delivered orders, once, with atomic running totals, a CHECK constraint and a recount job | Bounding boxes and B-trees, `EXPLAIN`, GIN indexes, generated columns, Bayesian averages, denormalised counters and reconciliation, lost updates |
-| **13. Frontend: customer app** (next) | React + TypeScript (Vite): browse, search, menu, cart, the checkout bill from `/orders/quote`, pay, live order status and notifications; served through the HTTPS gateway | API client generated from OpenAPI, tokens in the browser, same origin for site and API |
-| **14. Frontend: restaurant and rider screens** | Owner dashboard (incoming orders, accept/prepare, menu and stock, coupons, today's sales); rider view (assigned orders, pick up, deliver) | Role-based UI on top of the backend's role checks |
+| **13. Frontend: customer app** (done) | React + TypeScript (Vite): near me, search, menu, cart, the checkout bill from `/orders/quote` with price-change handling, pay with one idempotency key per attempt, live order status, reviews, my orders; a royal Indian menu theme with regional borders; nginx with CSP and immutable caching, served on the same origin through the Gateway; a 150 KB JavaScript budget in CI | API types generated from OpenAPI with contract tests, server vs client state, token storage trade-offs, open redirects, HTTP caching, performance budgets, accessibility |
+| **14. Frontend: restaurant and rider screens** (next) | Owner dashboard (incoming orders, accept/prepare, menu and stock, coupons, today's sales); rider view (assigned orders, pick up, deliver) | Role-based UI on top of the backend's role checks |
 | **15. Tracing** | OpenTelemetry traces across browser, Envoy, API, SQL, outbox and notifier, viewed in Jaeger; N+1 detection; sampling | Distributed tracing, context propagation through the outbox, the cost of tracing |
 | **16. Live on AWS** | Apply the Phase 6 Terraform, a real domain with a Let's Encrypt certificate, GitHub Actions deploying after each merge, a smoke test against the live URL, then `terraform destroy` | Continuous delivery, real cloud costs, why one server instead of EKS |
 
@@ -3142,6 +3412,20 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 **Full-text search, LIKE or trigrams?** Full-text (`tsvector` + GIN) for words with stemming and ranking. Trigram GIN for `ILIKE '%x%'` and typos. Run typo matching only when the exact search finds nothing, because similarity also matches look-alikes ("chai" ~ "Butter Chicken"). Track zero-result searches.
 
 **Why didn't PostgreSQL use my index?** On a small table a sequential scan is cheaper, and the planner is right. With other filters, another index may narrow more. Check with `EXPLAIN (ANALYZE)` on realistic data and statistics (`ANALYZE`), not on 10 demo rows.
+
+**How do you keep a frontend and an API in sync?** Generate the frontend's types from the API's OpenAPI description, commit both, and fail CI when either is out of date. A renamed field becomes a compile error instead of a blank screen.
+
+**Server state or client state?** Server state lives on the server, is shared and goes stale (orders, menus); client state belongs to this browser (an open dialog). Use a server-state cache (TanStack Query) with a freshness time per kind of data, instead of copying server data into Redux.
+
+**Where do you store a JWT in the browser?** `httpOnly` cookie is safest from XSS (JavaScript can't read it) but needs CSRF protection. `sessionStorage` is readable by injected scripts, so pair it with a strict CSP, short expiry and real logout. Avoid `localStorage` for tokens.
+
+**How do you cache a single-page app?** Hashed file names with `max-age=31536000, immutable`; `index.html` with `no-cache`. A deploy changes the names, so no one is stuck on old code and nobody re-downloads unchanged files.
+
+**Why put the app and the API on the same origin?** No CORS, no preflight `OPTIONS` requests, simpler cookies and CSP. Route by path at the proxy: `/` to the static site, `/api` to the API.
+
+**What's a performance budget?** A limit on something that hurts users (here, 150 KB of gzipped JavaScript before the first screen) that fails the build when exceeded, so the app can't get slower one dependency at a time.
+
+**What's an open redirect?** A `?next=` parameter that sends people to any URL after login, so attackers can use your real login page to forward victims to a fake one. Only accept paths on your own site, and reject `//host`.
 
 **What's unit economics in FinOps?** Cost per unit of business value. For us: infrastructure cost per completed order, tracked as orders grow.
 
@@ -3246,3 +3530,19 @@ Business and tax figures change often; the dates show when each was reported.
 93. Evan Miller, *Ranking Items With Star Ratings* (2014; ranking by the lower bound of a credible interval). https://www.evanmiller.org/ranking-items-with-star-ratings.html
 94. PostgreSQL 16 documentation, *12.2 Tables and Indexes* (a stored generated `tsvector` column with a GIN index). https://www.postgresql.org/docs/16/textsearch-tables.html
 95. PostgreSQL 16 documentation, *pg_trgm* (`word_similarity`, the `<%` operator and `pg_trgm.word_similarity_threshold`, default 0.6; GIN `gin_trgm_ops` also serves `LIKE`/`ILIKE`; a trusted extension). https://www.postgresql.org/docs/16/pgtrgm.html
+96. OWASP, *HTML5 Security Cheat Sheet*, Local Storage (avoid storing sensitive data such as session tokens in `localStorage`; prefer `sessionStorage` when persistence isn't needed). https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html
+97. OWASP, *Web Security Testing Guide: Testing Browser Storage* (tokens in `localStorage`/`sessionStorage` are readable by any script on the page). https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/12-Testing_Browser_Storage
+98. web.dev, *Prevent unnecessary network requests with the HTTP Cache* (long `max-age` for versioned URLs, `no-cache` for HTML). https://web.dev/articles/http-cache
+99. web.dev, *Love your cache* (`max-age=31536000, immutable` for hashed files). https://web.dev/articles/love-your-cache
+100. web.dev, *Performance budgets 101*. https://web.dev/articles/performance-budgets-101
+101. TanStack Query documentation, *Does TanStack Query replace Redux, MobX or other global state managers?* (server state vs client state), and *Important Defaults* (`staleTime`, retries, refetch on focus). https://tanstack.com/query/latest/docs/framework/react/guides/does-this-replace-client-state
+102. OWASP, *Unvalidated Redirects and Forwards Cheat Sheet*. https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html
+103. W3C, *Understanding WCAG 2.2 Success Criterion 1.4.3: Contrast (Minimum)* (4.5:1 for normal text). https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html
+104. W3C, *Understanding WCAG 2.2 Success Criterion 2.5.5: Target Size (Enhanced)* (44 × 44 CSS pixels). https://www.w3.org/WAI/WCAG22/Understanding/target-size-enhanced
+105. MDN Web Docs, *Content Security Policy (CSP)*. https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP
+106. MDN Web Docs, *Cross-Origin Resource Sharing (CORS)* (preflight requests). https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS
+107. Incredible India (Ministry of Tourism), *Sanganeri Hand Block Printing*. https://www.incredibleindia.gov.in/en/rajasthan/sanganeri-hand-block-printing
+108. Office of the Development Commissioner (Handicrafts), Ministry of Textiles, *Phulkari*. https://handicrafts.gov.in/crafts/All_Crafts/Craft_Categories/Textile/Embroidery/Phulkari/Phulkariwebpage.html
+109. Vite documentation, *Why Vite* (source served over native ES modules in development, bundled for production). https://vite.dev/guide/why
+110. openapi-typescript and openapi-fetch documentation (types generated from an OpenAPI schema; a type-checked `fetch` client). https://openapi-ts.dev/openapi-fetch/
+111. nginx documentation, *ngx_http_headers_module*, `add_header` (a level inherits `add_header` lines only when it has none of its own). https://nginx.org/en/docs/http/ngx_http_headers_module.html#add_header
