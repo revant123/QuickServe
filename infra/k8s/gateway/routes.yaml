@@ -16,7 +16,11 @@ spec:
             scheme: https
             statusCode: 301
 ---
-# 2. The API, on its own hostname.
+# 2. The API: /api (and the health checks and docs) on quickserve.localhost.
+#    Since Phase 13 everything else on this hostname goes to the customer app
+#    (route 2b). Gateway API picks the longest matching prefix, so /api/... comes
+#    here and / goes there. One hostname means the browser never makes a
+#    cross-origin request: no CORS configuration anywhere.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -29,9 +33,11 @@ spec:
     - quickserve.localhost
   rules:
     - matches:
-        - path:
-            type: PathPrefix
-            value: /
+        - path: { type: PathPrefix, value: /api }
+        - path: { type: PathPrefix, value: /health }
+        - path: { type: PathPrefix, value: /docs }
+        - path: { type: PathPrefix, value: /redoc }
+        - path: { type: Exact, value: /openapi.json }
       backendRefs:
         # The same Service the pods already had. Only port 80 (the app) is in
         # it; the metrics port isn't, so /metrics can't be reached from outside.
@@ -52,6 +58,33 @@ spec:
                 value: max-age=300
               - name: X-Content-Type-Options
                 value: nosniff
+---
+# 2b. The customer app (Phase 13): every other path on the same hostname.
+#     Its own security headers (CSP and friends) come from its nginx.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web
+spec:
+  parentRefs:
+    - name: quickserve
+      sectionName: https
+  hostnames:
+    - quickserve.localhost
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: / }
+      backendRefs:
+        - name: web
+          port: 80
+      timeouts:
+        request: 15s
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: max-age=300
 ---
 # 3. Grafana on another hostname, same Gateway, same IP, same certificate.
 # Host-based routing: the browser sends the hostname (in TLS's SNI and in the

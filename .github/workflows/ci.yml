@@ -66,6 +66,51 @@ jobs:
       - name: Tests
         run: pytest -q
 
+  # Phase 13: the customer app. Type-check, lint, unit and screen tests, build,
+  # and the size budget. Runs in parallel with the other jobs.
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install (exact versions from package-lock.json)
+        run: npm ci --no-audit --no-fund
+
+      - name: The TypeScript API types match openapi.json
+        # tests/test_openapi_contract.py checks openapi.json matches the API;
+        # this checks the generated types match openapi.json. Together: the app
+        # can't compile against an API that doesn't exist.
+        run: npm run check:api
+
+      - name: Type-check and lint
+        run: |
+          npm run typecheck
+          npm run lint
+
+      - name: Tests
+        run: npm test
+
+      - name: Build and check the size budget
+        run: |
+          npm run build
+          {
+            echo "### Customer app: first-load JavaScript"
+            echo '```'
+            node scripts/check-size.mjs
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          node scripts/check-size.mjs > /dev/null
+
   # Phase 5: build the Docker image and run the WHOLE stack exactly as
   # `docker compose --profile app up` does on your Mac, then poke it.
   # Runs in parallel with `test`, so the pipeline doesn't get slower.
@@ -86,7 +131,7 @@ jobs:
           done
           exit $status
 
-      - name: Build the image and start database, Redis, migrations, API and worker
+      - name: Build the images and start database, Redis, migrations, API, worker and app
         run: docker compose --profile app up -d --build
 
       - name: Wait until the API is ready
@@ -125,6 +170,21 @@ jobs:
           grep -q "notifier started" notifier.log
           test "$(docker inspect -f '{{.State.ExitCode}}' "$(docker compose --profile app ps -aq migrate)")" = "0"
 
+      - name: The customer app is served, and /api reaches the API through it
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do curl -fsS -o /dev/null http://localhost:8002/healthz && break; sleep 2; done
+          curl -fsS -D headers.txt -o index.html http://localhost:8002/orders/123   # a screen, not a file
+          grep -q '<div id="root">' index.html
+          grep -qi '^content-security-policy: default-src' headers.txt
+          grep -qi '^cache-control: no-cache' headers.txt
+          asset=$(grep -o '/assets/index-[^"]*\.js' index.html | head -1)
+          curl -fsS -D asset.txt -o /dev/null "http://localhost:8002$asset"
+          grep -qi 'cache-control: public, max-age=31536000, immutable' asset.txt
+          curl -fsS "http://localhost:8002/api/v1/restaurants/near?lat=30.7333&lng=76.7794" \
+            | python3 -c 'import sys, json; d = json.load(sys.stdin); assert d["total"] >= 3, d; print("restaurants via the app:", d["total"])'
+          test "$(docker compose --profile app exec -T web id -u)" = "101"   # nginx not as root
+
       - name: Worker stops cleanly on SIGTERM
         run: |
           docker compose --profile app stop worker
@@ -135,7 +195,7 @@ jobs:
         # Registry storage and every deploy's download are paid per GB.
         run: |
           echo "### Docker image size" >> "$GITHUB_STEP_SUMMARY"
-          docker image ls --format '| {{.Repository}}:{{.Tag}} | {{.Size}} |' | grep -i api >> "$GITHUB_STEP_SUMMARY"
+          docker image ls --format '| {{.Repository}}:{{.Tag}} | {{.Size}} |' | grep -iE 'api|web' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Show container logs if something failed
         if: failure()
@@ -150,9 +210,18 @@ jobs:
   # On pull requests it still builds (no push), so a broken publish step shows
   # up in review instead of after the merge.
   publish:
-    needs: [test, docker]
+    needs: [test, docker, frontend]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Two images: the API (also the worker and notifier) and, since Phase 13,
+    # the customer app. Same tags, so one commit = one matching pair.
+    strategy:
+      matrix:
+        include:
+          - image: quickserve
+            context: .
+          - image: quickserve-app
+            context: frontend
 
     # Least privilege: this job alone may write packages, and nothing else.
     permissions:
@@ -160,7 +229,7 @@ jobs:
       packages: write
 
     env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/quickserve   # registry names must be lowercase
+      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}   # registry names must be lowercase
       PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
     steps:
@@ -193,14 +262,14 @@ jobs:
       - name: Build (and push on main)
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: ${{ matrix.context }}
           push: ${{ env.PUBLISH == 'true' }}
           platforms: ${{ env.PUBLISH == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Reuse layers from earlier runs: faster builds, fewer CI minutes.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
       - name: Summary
         if: env.PUBLISH == 'true'
@@ -289,15 +358,17 @@ jobs:
           docker run --rm -v "$PWD/infra/k8s/monitoring:/etc/alertmanager:ro" --entrypoint amtool \
             prom/alertmanager:v0.35.0 check-config /etc/alertmanager/alertmanager.yml
 
-      - name: Build this commit's image
-        run: docker build -t quickserve:ci .
+      - name: Build this commit's images
+        run: |
+          docker build -t quickserve:ci .
+          docker build -t quickserve-app:ci frontend
 
       - name: Create a kind cluster and load the image into it
         run: |
           curl -sSLo kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
           chmod +x kind && sudo mv kind /usr/local/bin/kind
           kind create cluster --name quickserve --wait 120s
-          kind load docker-image quickserve:ci --name quickserve
+          kind load docker-image quickserve:ci quickserve-app:ci --name quickserve
 
       - name: Deploy (add-ons, database, Redis, migration Job, apps, monitoring, gateway)
         run: infra/k8s/deploy.sh infra/k8s/overlays/${{ matrix.overlay }}

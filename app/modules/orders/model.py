@@ -28,7 +28,8 @@ order_status_enum = Enum(OrderStatus, name="order_status")
 class Order(UUIDPrimaryKey, Timestamps, Base):
     __tablename__ = "orders"
 
-    customer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    # Indexed together with created_at (see __table_args__): "my orders, newest first".
+    customer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     restaurant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("restaurants.id"))
     status: Mapped[OrderStatus] = mapped_column(order_status_enum, default=OrderStatus.PLACED)
     delivery_address: Mapped[str] = mapped_column(String(500))
@@ -73,6 +74,10 @@ class Order(UUIDPrimaryKey, Timestamps, Base):
         Index("ix_orders_restaurant_status", "restaurant_id", "status"),
         # Serves the timeout job: "PAID orders whose accept_by has passed".
         Index("ix_orders_status_accept_by", "status", "accept_by"),
+        # Serves the customer app's "My orders" (Phase 13): one customer's orders,
+        # newest first. The index is already in that order, so there's no sort
+        # step, and it replaces the old index on customer_id alone.
+        Index("ix_orders_customer_newest", "customer_id", text("created_at DESC")),
     )
 
 

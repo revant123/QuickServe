@@ -68,12 +68,12 @@ echo "Inside quickserve: each app reaches only what it needs"
 from_deployment api postgres:5432:open redis:6379:open ${API_EXTRA[@]+"${API_EXTRA[@]}"} 1.1.1.1:443:blocked || failed=1
 from_deployment worker postgres:5432:open api:80:blocked redis:6379:blocked 1.1.1.1:443:blocked || failed=1
 from_deployment notifier postgres:5432:open api:80:blocked || failed=1
-from_new_pod "$NS" smoke-test api:80:open postgres:5432:blocked redis:6379:blocked || failed=1
+from_new_pod "$NS" smoke-test api:80:open postgres:5432:blocked redis:6379:blocked web:80:blocked || failed=1
 
 echo "From another namespace (a pod with NO policies of its own)"
 kubectl create namespace "$TEST_NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 from_new_pod "$TEST_NS" intruder \
-  "postgres.$NS:5432:blocked" "redis.$NS:6379:blocked" "api.$NS:80:blocked" ${INTRUDER_EXTRA[@]+"${INTRUDER_EXTRA[@]}"} \
+  "postgres.$NS:5432:blocked" "redis.$NS:6379:blocked" "api.$NS:80:blocked" "web.$NS:80:blocked" ${INTRUDER_EXTRA[@]+"${INTRUDER_EXTRA[@]}"} \
   quickserve-gateway.envoy-gateway-system:443:open 1.1.1.1:443:open || failed=1
 # The last two are the controls: the front door is open to everyone, and this
 # pod really can make connections, so "blocked" above means the policy did it.

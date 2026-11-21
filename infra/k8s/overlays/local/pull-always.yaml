@@ -59,3 +59,14 @@ spec:
       containers:
         - name: migrate
           imagePullPolicy: Always
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          imagePullPolicy: Always

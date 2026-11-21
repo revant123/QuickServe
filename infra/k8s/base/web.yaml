@@ -1,0 +1,78 @@
+# The customer app (Phase 13): nginx serving the built React files. The Gateway
+# sends / here and /api to the API, on the same hostname.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  selector:
+    app.kubernetes.io/name: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  # One pod is enough for static files here: a rolling update starts the new pod
+  # before stopping the old one, so a deploy has no gap. In production, put a
+  # CDN in front: most requests would never reach these pods at all.
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: web
+    spec:
+      automountServiceAccountToken: false # nginx never talks to the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101 # the nginx user of nginx-unprivileged
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: quickserve-app
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true # the files it serves can't be changed, even by a bug in nginx
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp # nginx-unprivileged keeps its pid file and buffers in /tmp
+              mountPath: /tmp
+          resources:
+            # Measured idle: about 3 MiB and no CPU to speak of. Small requests
+            # keep the scheduler (and the bill) honest.
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

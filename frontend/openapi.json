@@ -1,0 +1,4694 @@
+{
+  "components": {
+    "schemas": {
+      "AvailabilityUpdate": {
+        "properties": {
+          "is_available": {
+            "title": "Is Available",
+            "type": "boolean"
+          },
+          "unavailable_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Until"
+          }
+        },
+        "required": [
+          "is_available"
+        ],
+        "title": "AvailabilityUpdate",
+        "type": "object"
+      },
+      "BestSellerRow": {
+        "properties": {
+          "cycles": {
+            "title": "Cycles",
+            "type": "integer"
+          },
+          "hours_on_sale": {
+            "title": "Hours On Sale",
+            "type": "number"
+          },
+          "menu_item_id": {
+            "format": "uuid",
+            "title": "Menu Item Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "sell_through": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "units_sold / units_stocked, tracked items only",
+            "title": "Sell Through"
+          },
+          "sold_out_cycles": {
+            "title": "Sold Out Cycles",
+            "type": "integer"
+          },
+          "units_per_hour": {
+            "description": "Sales rate while the item was actually available",
+            "title": "Units Per Hour",
+            "type": "number"
+          },
+          "units_sold": {
+            "title": "Units Sold",
+            "type": "integer"
+          },
+          "units_stocked": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Units Stocked"
+          }
+        },
+        "required": [
+          "menu_item_id",
+          "name",
+          "units_sold",
+          "units_stocked",
+          "sell_through",
+          "hours_on_sale",
+          "units_per_hour",
+          "sold_out_cycles",
+          "cycles",
+          "rank"
+        ],
+        "title": "BestSellerRow",
+        "type": "object"
+      },
+      "BillLineOut": {
+        "properties": {
+          "amount": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Amount",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "amount"
+        ],
+        "title": "BillLineOut",
+        "type": "object"
+      },
+      "Body_login_api_v1_auth_login_post": {
+        "properties": {
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "password",
+            "title": "Client Secret"
+          },
+          "grant_type": {
+            "anyOf": [
+              {
+                "pattern": "^password$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Type"
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string"
+          },
+          "scope": {
+            "default": "",
+            "title": "Scope",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "Body_login_api_v1_auth_login_post",
+        "type": "object"
+      },
+      "CancelRequest": {
+        "properties": {
+          "reason": {
+            "maxLength": 300,
+            "minLength": 3,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "CancelRequest",
+        "type": "object"
+      },
+      "CouponCreate": {
+        "properties": {
+          "code": {
+            "examples": [
+              "WELCOME50"
+            ],
+            "pattern": "^[A-Za-z0-9]{3,30}$",
+            "title": "Code",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Description",
+            "type": "string"
+          },
+          "first_order_only": {
+            "default": false,
+            "title": "First Order Only",
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CouponKind"
+          },
+          "max_discount": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,8}|(?=[\\d.]{1,11}0*$)\\d{0,8}\\.\\d{0,2}0*$)",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Discount"
+          },
+          "max_uses_per_user": {
+            "default": 1,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Uses Per User",
+            "type": "integer"
+          },
+          "max_uses_total": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Uses Total"
+          },
+          "min_order_value": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,8}|(?=[\\d.]{1,11}0*$)\\d{0,8}\\.\\d{0,2}0*$)",
+                "type": "string"
+              }
+            ],
+            "default": "0",
+            "title": "Min Order Value"
+          },
+          "restaurant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restaurant Id"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,8}|(?=[\\d.]{1,11}0*$)\\d{0,8}\\.\\d{0,2}0*$)",
+                "type": "string"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "code",
+          "description",
+          "kind",
+          "value"
+        ],
+        "title": "CouponCreate",
+        "type": "object"
+      },
+      "CouponFunder": {
+        "description": "Who pays for the discount. It matters for the restaurant's payout: a\nplatform coupon is the platform's marketing cost, a restaurant coupon comes\nout of the restaurant's share.",
+        "enum": [
+          "PLATFORM",
+          "RESTAURANT"
+        ],
+        "title": "CouponFunder",
+        "type": "string"
+      },
+      "CouponKind": {
+        "enum": [
+          "PERCENT",
+          "FLAT"
+        ],
+        "title": "CouponKind",
+        "type": "string"
+      },
+      "CouponOut": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "first_order_only": {
+            "title": "First Order Only",
+            "type": "boolean"
+          },
+          "funded_by": {
+            "$ref": "#/components/schemas/CouponFunder"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CouponKind"
+          },
+          "max_discount": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Discount"
+          },
+          "min_order_value": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Min Order Value",
+            "type": "string"
+          },
+          "restaurant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restaurant Id"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          },
+          "value": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "description",
+          "kind",
+          "value",
+          "max_discount",
+          "min_order_value",
+          "restaurant_id",
+          "funded_by",
+          "first_order_only",
+          "valid_until"
+        ],
+        "title": "CouponOut",
+        "type": "object"
+      },
+      "CycleOut": {
+        "properties": {
+          "carried_in": {
+            "title": "Carried In",
+            "type": "integer"
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed At"
+          },
+          "cycle_no": {
+            "title": "Cycle No",
+            "type": "integer"
+          },
+          "leftover": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leftover"
+          },
+          "leftover_carried": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leftover Carried"
+          },
+          "sold_out_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sold Out At"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "units_consumed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Units Consumed"
+          },
+          "units_returned": {
+            "title": "Units Returned",
+            "type": "integer"
+          },
+          "units_stocked": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Units Stocked"
+          },
+          "units_wasted": {
+            "title": "Units Wasted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cycle_no",
+          "started_at",
+          "closed_at",
+          "units_stocked",
+          "carried_in",
+          "units_consumed",
+          "units_returned",
+          "units_wasted",
+          "leftover",
+          "leftover_carried",
+          "sold_out_at"
+        ],
+        "title": "CycleOut",
+        "type": "object"
+      },
+      "DishHit": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_veg": {
+            "title": "Is Veg",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "price": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Price",
+            "type": "string"
+          },
+          "restaurant": {
+            "$ref": "#/components/schemas/RestaurantCard"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "price",
+          "is_veg",
+          "restaurant"
+        ],
+        "title": "DishHit",
+        "type": "object"
+      },
+      "GeoPoint": {
+        "properties": {
+          "lat": {
+            "examples": [
+              30.7333
+            ],
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat",
+            "type": "number"
+          },
+          "lng": {
+            "examples": [
+              76.7794
+            ],
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lng",
+            "type": "number"
+          }
+        },
+        "required": [
+          "lat",
+          "lng"
+        ],
+        "title": "GeoPoint",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LocationUpdate": {
+        "description": "For restaurants created before Phase 11, which have no location yet.",
+        "properties": {
+          "delivery_radius_km": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 15.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,3}|(?=[\\d.]{1,5}0*$)\\d{0,3}\\.\\d{0,1}0*$)",
+                "type": "string"
+              }
+            ],
+            "default": "7.0",
+            "title": "Delivery Radius Km"
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "maximum": 90.0,
+                "minimum": -90.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,3}|(?=[\\d.]{1,10}0*$)\\d{0,3}\\.\\d{0,6}0*$)",
+                "type": "string"
+              }
+            ],
+            "title": "Latitude"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "maximum": 180.0,
+                "minimum": -180.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,3}|(?=[\\d.]{1,10}0*$)\\d{0,3}\\.\\d{0,6}0*$)",
+                "type": "string"
+              }
+            ],
+            "title": "Longitude"
+          }
+        },
+        "required": [
+          "latitude",
+          "longitude"
+        ],
+        "title": "LocationUpdate",
+        "type": "object"
+      },
+      "MenuItemCreate": {
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Description",
+            "type": "string"
+          },
+          "is_veg": {
+            "default": true,
+            "title": "Is Veg",
+            "type": "boolean"
+          },
+          "name": {
+            "maxLength": 150,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,8}|(?=[\\d.]{1,11}0*$)\\d{0,8}\\.\\d{0,2}0*$)",
+                "type": "string"
+              }
+            ],
+            "title": "Price"
+          },
+          "stock": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock"
+          },
+          "track_stock": {
+            "default": true,
+            "title": "Track Stock",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "price"
+        ],
+        "title": "MenuItemCreate",
+        "type": "object"
+      },
+      "MenuItemOut": {
+        "properties": {
+          "available": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available"
+          },
+          "consumed": {
+            "title": "Consumed",
+            "type": "integer"
+          },
+          "cycle_no": {
+            "title": "Cycle No",
+            "type": "integer"
+          },
+          "cycle_started_at": {
+            "format": "date-time",
+            "title": "Cycle Started At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_available": {
+            "title": "Is Available",
+            "type": "boolean"
+          },
+          "is_veg": {
+            "title": "Is Veg",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "price": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Price",
+            "type": "string"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "sold_out_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sold Out At"
+          },
+          "stock": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock"
+          },
+          "track_stock": {
+            "title": "Track Stock",
+            "type": "boolean"
+          },
+          "unavailable_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Until"
+          }
+        },
+        "required": [
+          "id",
+          "restaurant_id",
+          "name",
+          "description",
+          "price",
+          "is_veg",
+          "is_available",
+          "unavailable_until",
+          "track_stock",
+          "stock",
+          "consumed",
+          "available",
+          "cycle_no",
+          "cycle_started_at",
+          "sold_out_at"
+        ],
+        "title": "MenuItemOut",
+        "type": "object"
+      },
+      "MenuItemPublic": {
+        "description": "What a customer sees: no raw counters, just what helps them decide.",
+        "properties": {
+          "badge": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SOLD_OUT, ONLY_N_LEFT, SELLING_FAST or null",
+            "title": "Badge"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_veg": {
+            "title": "Is Veg",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "orderable": {
+            "title": "Orderable",
+            "type": "boolean"
+          },
+          "price": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Price",
+            "type": "string"
+          },
+          "units_left": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Shown only when stock is low",
+            "title": "Units Left"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "price",
+          "is_veg",
+          "orderable",
+          "badge",
+          "units_left"
+        ],
+        "title": "MenuItemPublic",
+        "type": "object"
+      },
+      "NearbyPage": {
+        "properties": {
+          "restaurants": {
+            "items": {
+              "$ref": "#/components/schemas/RestaurantCard"
+            },
+            "title": "Restaurants",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "restaurants"
+        ],
+        "title": "NearbyPage",
+        "type": "object"
+      },
+      "NotificationOut": {
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "order_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Id"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Read At"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "order_id",
+          "kind",
+          "title",
+          "body",
+          "created_at",
+          "read_at"
+        ],
+        "title": "NotificationOut",
+        "type": "object"
+      },
+      "OrderCreate": {
+        "properties": {
+          "coupon_code": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon Code"
+          },
+          "delivery_address": {
+            "maxLength": 500,
+            "minLength": 5,
+            "title": "Delivery Address",
+            "type": "string"
+          },
+          "delivery_location": {
+            "$ref": "#/components/schemas/GeoPoint"
+          },
+          "expected_total": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,8}|(?=[\\d.]{1,11}0*$)\\d{0,8}\\.\\d{0,2}0*$)",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OrderLineIn"
+            },
+            "maxItems": 30,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "restaurant_id",
+          "delivery_address",
+          "delivery_location",
+          "items"
+        ],
+        "title": "OrderCreate",
+        "type": "object"
+      },
+      "OrderItemOut": {
+        "properties": {
+          "cycle_no": {
+            "title": "Cycle No",
+            "type": "integer"
+          },
+          "item_name": {
+            "title": "Item Name",
+            "type": "string"
+          },
+          "line_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Line Total",
+            "type": "string"
+          },
+          "menu_item_id": {
+            "format": "uuid",
+            "title": "Menu Item Id",
+            "type": "string"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "integer"
+          },
+          "unit_price": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Unit Price",
+            "type": "string"
+          }
+        },
+        "required": [
+          "menu_item_id",
+          "item_name",
+          "unit_price",
+          "quantity",
+          "line_total",
+          "cycle_no"
+        ],
+        "title": "OrderItemOut",
+        "type": "object"
+      },
+      "OrderLineIn": {
+        "properties": {
+          "menu_item_id": {
+            "format": "uuid",
+            "title": "Menu Item Id",
+            "type": "string"
+          },
+          "quantity": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 50.0,
+            "title": "Quantity",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "menu_item_id",
+          "quantity"
+        ],
+        "title": "OrderLineIn",
+        "type": "object"
+      },
+      "OrderOut": {
+        "properties": {
+          "accept_by": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept By"
+          },
+          "cancel_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Reason"
+          },
+          "coupon_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon Code"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "customer_id": {
+            "format": "uuid",
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "delivery_address": {
+            "title": "Delivery Address",
+            "type": "string"
+          },
+          "delivery_fee": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Delivery Fee",
+            "type": "string"
+          },
+          "discount": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Discount",
+            "type": "string"
+          },
+          "distance_km": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance Km"
+          },
+          "grand_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Grand Total",
+            "type": "string"
+          },
+          "gst_fees": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Gst Fees",
+            "type": "string"
+          },
+          "gst_food": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Gst Food",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "item_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Item Total",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OrderItemOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "packaging_charge": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Packaging Charge",
+            "type": "string"
+          },
+          "paid_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paid At"
+          },
+          "pay_by": {
+            "format": "date-time",
+            "title": "Pay By",
+            "type": "string"
+          },
+          "platform_fee": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Platform Fee",
+            "type": "string"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "small_order_fee": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Small Order Fee",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          },
+          "surge_fee": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Surge Fee",
+            "type": "string"
+          },
+          "surge_reasons": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surge Reasons"
+          }
+        },
+        "required": [
+          "id",
+          "customer_id",
+          "restaurant_id",
+          "status",
+          "delivery_address",
+          "item_total",
+          "packaging_charge",
+          "delivery_fee",
+          "platform_fee",
+          "small_order_fee",
+          "surge_fee",
+          "surge_reasons",
+          "discount",
+          "coupon_code",
+          "gst_food",
+          "gst_fees",
+          "grand_total",
+          "distance_km",
+          "pay_by",
+          "paid_at",
+          "accept_by",
+          "cancel_reason",
+          "created_at",
+          "items"
+        ],
+        "title": "OrderOut",
+        "type": "object"
+      },
+      "OrderStatus": {
+        "enum": [
+          "PLACED",
+          "PAID",
+          "ACCEPTED",
+          "PREPARING",
+          "READY",
+          "OUT_FOR_DELIVERY",
+          "DELIVERED",
+          "CANCELLED",
+          "REJECTED",
+          "PAYMENT_FAILED"
+        ],
+        "title": "OrderStatus",
+        "type": "string"
+      },
+      "OrderSummary": {
+        "description": "One row of \"My orders\": enough for the list, without every bill line.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "grand_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Grand Total",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "item_count": {
+            "title": "Item Count",
+            "type": "integer"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "restaurant_name": {
+            "title": "Restaurant Name",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          }
+        },
+        "required": [
+          "id",
+          "restaurant_id",
+          "restaurant_name",
+          "status",
+          "grand_total",
+          "item_count",
+          "created_at"
+        ],
+        "title": "OrderSummary",
+        "type": "object"
+      },
+      "PaymentOut": {
+        "properties": {
+          "amount": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Amount",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          },
+          "provider_reference": {
+            "title": "Provider Reference",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PaymentStatus"
+          }
+        },
+        "required": [
+          "id",
+          "order_id",
+          "amount",
+          "status",
+          "idempotency_key",
+          "provider_reference",
+          "failure_reason",
+          "created_at"
+        ],
+        "title": "PaymentOut",
+        "type": "object"
+      },
+      "PaymentStatus": {
+        "enum": [
+          "SUCCESS",
+          "FAILED",
+          "REFUNDED"
+        ],
+        "title": "PaymentStatus",
+        "type": "string"
+      },
+      "PricingInfo": {
+        "description": "What the app shows on a \"why am I paying this?\" screen.",
+        "properties": {
+          "delivery_fee_slabs": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                  "type": "string"
+                },
+                {
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Delivery Fee Slabs",
+            "type": "array"
+          },
+          "free_delivery_above": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Free Delivery Above",
+            "type": "string"
+          },
+          "free_delivery_max_km": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Free Delivery Max Km",
+            "type": "string"
+          },
+          "late_night_fee": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Late Night Fee",
+            "type": "string"
+          },
+          "late_night_hours": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Late Night Hours",
+            "type": "array"
+          },
+          "local_time": {
+            "format": "time",
+            "title": "Local Time",
+            "type": "string"
+          },
+          "peak_fee": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Peak Fee",
+            "type": "string"
+          },
+          "peak_hours": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Peak Hours",
+            "type": "array"
+          },
+          "platform_fee": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Platform Fee",
+            "type": "string"
+          },
+          "rain_fee": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Rain Fee",
+            "type": "string"
+          },
+          "rain_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rain Until"
+          },
+          "small_order_below": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Small Order Below",
+            "type": "string"
+          },
+          "small_order_fee": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Small Order Fee",
+            "type": "string"
+          },
+          "surge_now": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Surge Now",
+            "type": "array"
+          }
+        },
+        "required": [
+          "local_time",
+          "surge_now",
+          "rain_until",
+          "platform_fee",
+          "delivery_fee_slabs",
+          "free_delivery_above",
+          "free_delivery_max_km",
+          "small_order_below",
+          "small_order_fee",
+          "peak_hours",
+          "peak_fee",
+          "late_night_hours",
+          "late_night_fee",
+          "rain_fee"
+        ],
+        "title": "PricingInfo",
+        "type": "object"
+      },
+      "ProfileUpdate": {
+        "description": "What customers see in the list: cuisines and how long the kitchen usually takes.",
+        "properties": {
+          "avg_prep_minutes": {
+            "maximum": 120.0,
+            "minimum": 5.0,
+            "title": "Avg Prep Minutes",
+            "type": "integer"
+          },
+          "cuisines": {
+            "examples": [
+              [
+                "North Indian",
+                "Punjabi"
+              ]
+            ],
+            "items": {
+              "maxLength": 30,
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Cuisines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "avg_prep_minutes"
+        ],
+        "title": "ProfileUpdate",
+        "type": "object"
+      },
+      "QuoteOut": {
+        "description": "The bill before ordering: the same numbers the order will have, if\nnothing changes in between (send grand_total back as expected_total).",
+        "properties": {
+          "coupon_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon Code"
+          },
+          "coupon_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon Error"
+          },
+          "discount": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Discount",
+            "type": "string"
+          },
+          "distance_km": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Distance Km",
+            "type": "string"
+          },
+          "grand_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Grand Total",
+            "type": "string"
+          },
+          "item_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Item Total",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/BillLineOut"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "surge_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Surge Reasons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "restaurant_id",
+          "distance_km",
+          "surge_reasons",
+          "coupon_code",
+          "coupon_error",
+          "lines",
+          "item_total",
+          "discount",
+          "grand_total"
+        ],
+        "title": "QuoteOut",
+        "type": "object"
+      },
+      "RainOut": {
+        "properties": {
+          "raining": {
+            "title": "Raining",
+            "type": "boolean"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Until"
+          }
+        },
+        "required": [
+          "raining",
+          "until"
+        ],
+        "title": "RainOut",
+        "type": "object"
+      },
+      "RainRequest": {
+        "properties": {
+          "minutes": {
+            "maximum": 720.0,
+            "minimum": 5.0,
+            "title": "Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "minutes"
+        ],
+        "title": "RainRequest",
+        "type": "object"
+      },
+      "RatingsReport": {
+        "properties": {
+          "restaurants_checked": {
+            "title": "Restaurants Checked",
+            "type": "integer"
+          },
+          "restaurants_corrected": {
+            "title": "Restaurants Corrected",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "restaurants_checked",
+          "restaurants_corrected"
+        ],
+        "title": "RatingsReport",
+        "type": "object"
+      },
+      "RestaurantCard": {
+        "description": "One restaurant in the \"near me\" list: what a listing card shows.",
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "cuisines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cuisines",
+            "type": "array"
+          },
+          "delivery_fee": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Delivery Fee",
+            "type": "string"
+          },
+          "distance_km": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Distance Km",
+            "type": "string"
+          },
+          "eta_minutes": {
+            "title": "Eta Minutes",
+            "type": "integer"
+          },
+          "eta_text": {
+            "title": "Eta Text",
+            "type": "string"
+          },
+          "free_delivery_above": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Delivery Above"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "packaging_charge": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Packaging Charge",
+            "type": "string"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating"
+          },
+          "rating_count": {
+            "title": "Rating Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "address",
+          "cuisines",
+          "distance_km",
+          "eta_minutes",
+          "eta_text",
+          "rating",
+          "rating_count",
+          "delivery_fee",
+          "free_delivery_above",
+          "packaging_charge"
+        ],
+        "title": "RestaurantCard",
+        "type": "object"
+      },
+      "RestaurantCreate": {
+        "properties": {
+          "address": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Address",
+            "type": "string"
+          },
+          "avg_prep_minutes": {
+            "default": 20,
+            "maximum": 120.0,
+            "minimum": 5.0,
+            "title": "Avg Prep Minutes",
+            "type": "integer"
+          },
+          "cuisines": {
+            "examples": [
+              [
+                "North Indian",
+                "Punjabi"
+              ]
+            ],
+            "items": {
+              "maxLength": 30,
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Cuisines",
+            "type": "array"
+          },
+          "delivery_radius_km": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 15.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,3}|(?=[\\d.]{1,5}0*$)\\d{0,3}\\.\\d{0,1}0*$)",
+                "type": "string"
+              }
+            ],
+            "default": "7.0",
+            "title": "Delivery Radius Km"
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "maximum": 90.0,
+                "minimum": -90.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,3}|(?=[\\d.]{1,10}0*$)\\d{0,3}\\.\\d{0,6}0*$)",
+                "type": "string"
+              }
+            ],
+            "examples": [
+              "30.739800"
+            ],
+            "title": "Latitude"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "maximum": 180.0,
+                "minimum": -180.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,3}|(?=[\\d.]{1,10}0*$)\\d{0,3}\\.\\d{0,6}0*$)",
+                "type": "string"
+              }
+            ],
+            "examples": [
+              "76.782700"
+            ],
+            "title": "Longitude"
+          },
+          "name": {
+            "maxLength": 150,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "packaging_charge": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,8}|(?=[\\d.]{1,11}0*$)\\d{0,8}\\.\\d{0,2}0*$)",
+                "type": "string"
+              }
+            ],
+            "default": "0",
+            "title": "Packaging Charge"
+          }
+        },
+        "required": [
+          "name",
+          "address",
+          "latitude",
+          "longitude"
+        ],
+        "title": "RestaurantCreate",
+        "type": "object"
+      },
+      "RestaurantOut": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "avg_prep_minutes": {
+            "title": "Avg Prep Minutes",
+            "type": "integer"
+          },
+          "cuisines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cuisines",
+            "type": "array"
+          },
+          "delivery_radius_km": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Delivery Radius Km",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_open": {
+            "title": "Is Open",
+            "type": "boolean"
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitude"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitude"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "owner_id": {
+            "format": "uuid",
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "packaging_charge": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Packaging Charge",
+            "type": "string"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating"
+          },
+          "rating_count": {
+            "title": "Rating Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "owner_id",
+          "name",
+          "address",
+          "is_open",
+          "packaging_charge",
+          "latitude",
+          "longitude",
+          "delivery_radius_km",
+          "cuisines",
+          "avg_prep_minutes",
+          "rating",
+          "rating_count"
+        ],
+        "title": "RestaurantOut",
+        "type": "object"
+      },
+      "RestaurantReviews": {
+        "properties": {
+          "distribution": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Distribution",
+            "type": "object"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating"
+          },
+          "rating_count": {
+            "title": "Rating Count",
+            "type": "integer"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewOut"
+            },
+            "title": "Reviews",
+            "type": "array"
+          }
+        },
+        "required": [
+          "restaurant_id",
+          "rating",
+          "rating_count",
+          "distribution",
+          "reviews"
+        ],
+        "title": "RestaurantReviews",
+        "type": "object"
+      },
+      "RestockRequest": {
+        "properties": {
+          "carry_over_leftover": {
+            "default": false,
+            "description": "Add unsold units from the closing cycle to the new stock. False for most cooked food (leftovers are discarded); true for packaged items.",
+            "title": "Carry Over Leftover",
+            "type": "boolean"
+          },
+          "quantity": {
+            "description": "Units prepared for the new cycle",
+            "minimum": 0.0,
+            "title": "Quantity",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "quantity"
+        ],
+        "title": "RestockRequest",
+        "type": "object"
+      },
+      "RestockResult": {
+        "properties": {
+          "closed_cycle": {
+            "$ref": "#/components/schemas/CycleOut"
+          },
+          "item": {
+            "$ref": "#/components/schemas/MenuItemOut"
+          }
+        },
+        "required": [
+          "closed_cycle",
+          "item"
+        ],
+        "title": "RestockResult",
+        "type": "object"
+      },
+      "RestockSuggestion": {
+        "properties": {
+          "based_on_cycles": {
+            "title": "Based On Cycles",
+            "type": "integer"
+          },
+          "explanation": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Explanation",
+            "type": "array"
+          },
+          "menu_item_id": {
+            "format": "uuid",
+            "title": "Menu Item Id",
+            "type": "string"
+          },
+          "suggested_quantity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Quantity"
+          }
+        },
+        "required": [
+          "menu_item_id",
+          "suggested_quantity",
+          "based_on_cycles",
+          "explanation"
+        ],
+        "title": "RestockSuggestion",
+        "type": "object"
+      },
+      "ReviewCreate": {
+        "properties": {
+          "comment": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Comment",
+            "type": "string"
+          },
+          "rating": {
+            "description": "1 to 5 stars",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Rating",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rating"
+        ],
+        "title": "ReviewCreate",
+        "type": "object"
+      },
+      "ReviewOut": {
+        "properties": {
+          "comment": {
+            "title": "Comment",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          },
+          "rating": {
+            "title": "Rating",
+            "type": "integer"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "reviewer": {
+            "title": "Reviewer",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "order_id",
+          "restaurant_id",
+          "rating",
+          "comment",
+          "reviewer",
+          "created_at"
+        ],
+        "title": "ReviewOut",
+        "type": "object"
+      },
+      "Role": {
+        "enum": [
+          "CUSTOMER",
+          "RESTAURANT_OWNER",
+          "RIDER",
+          "ADMIN"
+        ],
+        "title": "Role",
+        "type": "string"
+      },
+      "SearchResult": {
+        "properties": {
+          "dishes": {
+            "items": {
+              "$ref": "#/components/schemas/DishHit"
+            },
+            "title": "Dishes",
+            "type": "array"
+          },
+          "matched": {
+            "enum": [
+              "exact",
+              "fuzzy",
+              "none"
+            ],
+            "title": "Matched",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "restaurants": {
+            "items": {
+              "$ref": "#/components/schemas/RestaurantCard"
+            },
+            "title": "Restaurants",
+            "type": "array"
+          }
+        },
+        "required": [
+          "query",
+          "matched",
+          "restaurants",
+          "dishes"
+        ],
+        "title": "SearchResult",
+        "type": "object"
+      },
+      "SimulatedOutcome": {
+        "enum": [
+          "success",
+          "failure"
+        ],
+        "title": "SimulatedOutcome",
+        "type": "string"
+      },
+      "SortBy": {
+        "enum": [
+          "distance",
+          "rating",
+          "eta"
+        ],
+        "title": "SortBy",
+        "type": "string"
+      },
+      "StatusEventOut": {
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "from_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "to_status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          }
+        },
+        "required": [
+          "from_status",
+          "to_status",
+          "actor",
+          "note",
+          "created_at"
+        ],
+        "title": "StatusEventOut",
+        "type": "object"
+      },
+      "StatusUpdate": {
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "StatusUpdate",
+        "type": "object"
+      },
+      "TimeoutReport": {
+        "properties": {
+          "auto_rejected": {
+            "title": "Auto Rejected",
+            "type": "integer"
+          },
+          "payment_expired": {
+            "title": "Payment Expired",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "payment_expired",
+          "auto_rejected"
+        ],
+        "title": "TimeoutReport",
+        "type": "object"
+      },
+      "TokenOut": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "expires_in_minutes": {
+            "title": "Expires In Minutes",
+            "type": "integer"
+          },
+          "token_type": {
+            "default": "bearer",
+            "title": "Token Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "expires_in_minutes"
+        ],
+        "title": "TokenOut",
+        "type": "object"
+      },
+      "UserCreate": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 128,
+            "minLength": 8,
+            "title": "Password",
+            "type": "string"
+          },
+          "role": {
+            "default": "CUSTOMER",
+            "enum": [
+              "CUSTOMER",
+              "RESTAURANT_OWNER",
+              "RIDER"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "password"
+        ],
+        "title": "UserCreate",
+        "type": "object"
+      },
+      "UserOut": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "email",
+          "role"
+        ],
+        "title": "UserOut",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2PasswordBearer": {
+        "flows": {
+          "password": {
+            "scopes": {},
+            "tokenUrl": "/api/v1/auth/login"
+          }
+        },
+        "type": "oauth2"
+      }
+    }
+  },
+  "info": {
+    "description": "Food ordering and delivery platform: a learning project for backend, DevOps and FinOps.",
+    "title": "QuickServe API",
+    "version": "0.5.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/": {
+      "get": {
+        "operationId": "home__get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Home",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/admin/jobs/order-timeouts": {
+      "post": {
+        "description": "Admins only. Manual trigger for now; in Phase 4 a scheduler runs this every minute.",
+        "operationId": "run_order_timeouts_api_v1_admin_jobs_order_timeouts_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeoutReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Run Order Timeouts",
+        "tags": [
+          "orders",
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/jobs/recompute-ratings": {
+      "post": {
+        "description": "Admins only. Recounts every restaurant's rating totals from the reviews and reports drift.",
+        "operationId": "recompute_ratings_api_v1_admin_jobs_recompute_ratings_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RatingsReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Recompute Ratings",
+        "tags": [
+          "reviews",
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/surge/rain": {
+      "delete": {
+        "operationId": "end_rain_api_v1_admin_surge_rain_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RainOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "End Rain",
+        "tags": [
+          "pricing",
+          "admin"
+        ]
+      },
+      "put": {
+        "description": "Admins only. Every order pays the rain fee until it switches itself off.",
+        "operationId": "start_rain_api_v1_admin_surge_rain_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RainOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Start Rain",
+        "tags": [
+          "pricing",
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "description": "Log in with your email (in the `username` field) and password.\n\nThis uses the standard OAuth2 password form, which is what makes the\n\"Authorize\" button in Swagger UI work. Send the token you get back as the\nheader `Authorization: Bearer <access_token>` on later requests.\nAfter 5 wrong passwords for one email (20 from one IP) in 15 minutes,\nlogin answers 429 Too Many Requests until the window ends.",
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_login_api_v1_auth_login_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "description": "Invalidate the token you're using right now. Other devices stay logged in.",
+        "operationId": "logout_api_v1_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/coupons": {
+      "get": {
+        "description": "Public. Coupons a customer could try at checkout (per-customer rules are checked in the quote).",
+        "operationId": "available_coupons_api_v1_coupons_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "restaurant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Restaurant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CouponOut"
+                  },
+                  "title": "Response Available Coupons Api V1 Coupons Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Available Coupons",
+        "tags": [
+          "coupons"
+        ]
+      },
+      "post": {
+        "description": "Admins: platform-funded coupons. Restaurant owners: coupons for their own restaurant, which they fund.",
+        "operationId": "create_coupon_api_v1_coupons_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CouponCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CouponOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Coupon",
+        "tags": [
+          "coupons"
+        ]
+      }
+    },
+    "/api/v1/menu/{menu_item_id}/availability": {
+      "patch": {
+        "operationId": "set_availability_api_v1_menu__menu_item_id__availability_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "menu_item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Menu Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AvailabilityUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MenuItemOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Set Availability",
+        "tags": [
+          "menu"
+        ]
+      }
+    },
+    "/api/v1/menu/{menu_item_id}/cycles": {
+      "get": {
+        "operationId": "cycle_history_api_v1_menu__menu_item_id__cycles_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "menu_item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Menu Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CycleOut"
+                  },
+                  "title": "Response Cycle History Api V1 Menu  Menu Item Id  Cycles Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Cycle History",
+        "tags": [
+          "menu"
+        ]
+      }
+    },
+    "/api/v1/menu/{menu_item_id}/restock": {
+      "post": {
+        "operationId": "restock_api_v1_menu__menu_item_id__restock_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "menu_item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Menu Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestockRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestockResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Restock",
+        "tags": [
+          "menu"
+        ]
+      }
+    },
+    "/api/v1/menu/{menu_item_id}/restock-suggestion": {
+      "get": {
+        "operationId": "restock_suggestion_api_v1_menu__menu_item_id__restock_suggestion_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "menu_item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Menu Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestockSuggestion"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Restock Suggestion",
+        "tags": [
+          "menu"
+        ]
+      }
+    },
+    "/api/v1/notifications": {
+      "get": {
+        "description": "Your notifications, newest first. They appear a second or two after the\nevent, once the notifier has picked it up from the outbox.",
+        "operationId": "my_notifications_api_v1_notifications_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "unread_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Unread Only",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationOut"
+                  },
+                  "title": "Response My Notifications Api V1 Notifications Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "My Notifications",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/v1/notifications/{notification_id}/read": {
+      "post": {
+        "operationId": "mark_read_api_v1_notifications__notification_id__read_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "notification_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Notification Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Mark Read",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/v1/orders": {
+      "get": {
+        "description": "Customers only: your own orders, newest first (the app's \"My orders\" screen).",
+        "operationId": "my_orders_api_v1_orders_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrderSummary"
+                  },
+                  "title": "Response My Orders Api V1 Orders Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "My Orders",
+        "tags": [
+          "orders"
+        ]
+      },
+      "post": {
+        "description": "Customers only. The order belongs to the logged-in customer.",
+        "operationId": "place_order_api_v1_orders_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Place Order",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/api/v1/orders/quote": {
+      "post": {
+        "description": "The bill for this cart, right now: every line, with the reasons. Reserves nothing.\n\nShow it at checkout, then place the order with expected_total set to its\ngrand_total: if anything changed in between, the order is refused (409)\nwith the new total instead of silently charging more.",
+        "operationId": "quote_order_api_v1_orders_quote_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Quote Order",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/api/v1/orders/{order_id}": {
+      "get": {
+        "description": "Visible to: the customer who placed it, the restaurant's owner, riders once it's READY, admins.",
+        "operationId": "get_order_api_v1_orders__order_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get Order",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/api/v1/orders/{order_id}/cancel": {
+      "post": {
+        "description": "Customers can cancel their own order before the restaurant accepts it; admins any time before delivery.",
+        "operationId": "cancel_order_api_v1_orders__order_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Cancel Order",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/api/v1/orders/{order_id}/payments": {
+      "get": {
+        "operationId": "list_payments_api_v1_orders__order_id__payments_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PaymentOut"
+                  },
+                  "title": "Response List Payments Api V1 Orders  Order Id  Payments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Payments",
+        "tags": [
+          "payments"
+        ]
+      },
+      "post": {
+        "description": "Pay for your own order. Retrying with the same Idempotency-Key returns the first result.",
+        "operationId": "pay_api_v1_orders__order_id__payments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "simulate",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SimulatedOutcome",
+              "default": "success"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Pay",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/orders/{order_id}/review": {
+      "post": {
+        "description": "The customer who placed a DELIVERED order, once, within a few days of delivery.",
+        "operationId": "review_order_api_v1_orders__order_id__review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Review Order",
+        "tags": [
+          "reviews"
+        ]
+      }
+    },
+    "/api/v1/orders/{order_id}/status": {
+      "patch": {
+        "description": "Restaurant owner: ACCEPTED, REJECTED, PREPARING, READY. Rider: OUT_FOR_DELIVERY, DELIVERED. Admin: CANCELLED.",
+        "operationId": "update_status_api_v1_orders__order_id__status_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update Status",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/api/v1/orders/{order_id}/timeline": {
+      "get": {
+        "operationId": "order_timeline_api_v1_orders__order_id__timeline_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/StatusEventOut"
+                  },
+                  "title": "Response Order Timeline Api V1 Orders  Order Id  Timeline Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Order Timeline",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/api/v1/payments/{payment_id}": {
+      "get": {
+        "operationId": "get_payment_api_v1_payments__payment_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "payment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Payment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get Payment",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/pricing": {
+      "get": {
+        "description": "Public. The fee rules, and which surge fees apply right now.",
+        "operationId": "pricing_info_api_v1_pricing_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PricingInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Pricing Info",
+        "tags": [
+          "pricing"
+        ]
+      }
+    },
+    "/api/v1/restaurants": {
+      "get": {
+        "description": "Public: no login needed to browse.",
+        "operationId": "list_restaurants_api_v1_restaurants_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RestaurantOut"
+                  },
+                  "title": "Response List Restaurants Api V1 Restaurants Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Restaurants",
+        "tags": [
+          "restaurants"
+        ]
+      },
+      "post": {
+        "description": "Restaurant owners only. You become the owner of the restaurant you create.",
+        "operationId": "create_restaurant_api_v1_restaurants_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestaurantCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestaurantOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Restaurant",
+        "tags": [
+          "restaurants"
+        ]
+      }
+    },
+    "/api/v1/restaurants/near": {
+      "get": {
+        "description": "Public. Open restaurants that deliver to this point, with distance, delivery time,\ndelivery fee and rating. Sort by distance (default), rating or eta.",
+        "operationId": "restaurants_near_api_v1_restaurants_near_get",
+        "parameters": [
+          {
+            "description": "Where to deliver",
+            "in": "query",
+            "name": "lat",
+            "required": true,
+            "schema": {
+              "description": "Where to deliver",
+              "examples": [
+                30.7333
+              ],
+              "maximum": 90,
+              "minimum": -90,
+              "title": "Lat",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lng",
+            "required": true,
+            "schema": {
+              "examples": [
+                76.7794
+              ],
+              "maximum": 180,
+              "minimum": -180,
+              "title": "Lng",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SortBy",
+              "default": "distance"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cuisine",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 40,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "examples": [
+                "North Indian"
+              ],
+              "title": "Cuisine"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_rating",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5.0,
+                  "minimum": 1.0,
+                  "type": "number"
+                },
+                {
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "examples": [
+                "4.0"
+              ],
+              "title": "Min Rating"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NearbyPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restaurants Near",
+        "tags": [
+          "discovery"
+        ]
+      }
+    },
+    "/api/v1/restaurants/{restaurant_id}": {
+      "get": {
+        "description": "Public. One restaurant, for the app's menu page (a shared link or a refresh lands here first).",
+        "operationId": "get_restaurant_api_v1_restaurants__restaurant_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Restaurant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestaurantOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Restaurant",
+        "tags": [
+          "restaurants"
+        ]
+      }
+    },
+    "/api/v1/restaurants/{restaurant_id}/best-sellers": {
+      "get": {
+        "operationId": "best_sellers_api_v1_restaurants__restaurant_id__best_sellers_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Restaurant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BestSellerRow"
+                  },
+                  "title": "Response Best Sellers Api V1 Restaurants  Restaurant Id  Best Sellers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Best Sellers",
+        "tags": [
+          "menu"
+        ]
+      }
+    },
+    "/api/v1/restaurants/{restaurant_id}/location": {
+      "put": {
+        "description": "The restaurant's owner (or an admin). Needed before a restaurant from before Phase 11 can take orders.",
+        "operationId": "set_location_api_v1_restaurants__restaurant_id__location_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Restaurant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocationUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestaurantOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Set Location",
+        "tags": [
+          "restaurants"
+        ]
+      }
+    },
+    "/api/v1/restaurants/{restaurant_id}/menu": {
+      "get": {
+        "description": "Public: what a customer sees, no login needed. Cached in Redis for a few seconds;\nthe X-Cache response header says HIT, MISS or BYPASS (Redis unavailable).",
+        "operationId": "customer_menu_api_v1_restaurants__restaurant_id__menu_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Restaurant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MenuItemPublic"
+                  },
+                  "title": "Response Customer Menu Api V1 Restaurants  Restaurant Id  Menu Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Customer Menu",
+        "tags": [
+          "menu"
+        ]
+      },
+      "post": {
+        "operationId": "add_menu_item_api_v1_restaurants__restaurant_id__menu_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Restaurant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MenuItemCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MenuItemOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Add Menu Item",
+        "tags": [
+          "menu"
+        ]
+      }
+    },
+    "/api/v1/restaurants/{restaurant_id}/menu/manage": {
+      "get": {
+        "description": "The owner's view, with raw stock and consumed counters.",
+        "operationId": "owner_menu_api_v1_restaurants__restaurant_id__menu_manage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Restaurant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MenuItemOut"
+                  },
+                  "title": "Response Owner Menu Api V1 Restaurants  Restaurant Id  Menu Manage Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Owner Menu",
+        "tags": [
+          "menu"
+        ]
+      }
+    },
+    "/api/v1/restaurants/{restaurant_id}/profile": {
+      "put": {
+        "description": "The restaurant's owner (or an admin). Cuisines and usual preparation time (Phase 12).",
+        "operationId": "set_profile_api_v1_restaurants__restaurant_id__profile_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Restaurant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestaurantOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Set Profile",
+        "tags": [
+          "restaurants"
+        ]
+      }
+    },
+    "/api/v1/restaurants/{restaurant_id}/reviews": {
+      "get": {
+        "description": "Public. Rating summary with the star distribution, and the newest reviews.",
+        "operationId": "list_reviews_api_v1_restaurants__restaurant_id__reviews_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Restaurant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestaurantReviews"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Reviews",
+        "tags": [
+          "reviews"
+        ]
+      }
+    },
+    "/api/v1/search": {
+      "get": {
+        "description": "Public. Dishes and restaurants matching q, from restaurants that deliver to you.\nTolerates typos (\"paner\", \"biriyani\") when nothing matches exactly.",
+        "operationId": "search_api_v1_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "examples": [
+                "paneer"
+              ],
+              "maxLength": 60,
+              "minLength": 2,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Where to deliver",
+            "in": "query",
+            "name": "lat",
+            "required": true,
+            "schema": {
+              "description": "Where to deliver",
+              "examples": [
+                30.7333
+              ],
+              "maximum": 90,
+              "minimum": -90,
+              "title": "Lat",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lng",
+            "required": true,
+            "schema": {
+              "examples": [
+                76.7794
+              ],
+              "maximum": 180,
+              "minimum": -180,
+              "title": "Lng",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search",
+        "tags": [
+          "discovery"
+        ]
+      }
+    },
+    "/api/v1/users": {
+      "post": {
+        "description": "Sign up as a customer, restaurant owner or rider. Then log in at /auth/login.",
+        "operationId": "register_api_v1_users_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/users/me": {
+      "get": {
+        "description": "Who am I? Handy for checking that your token works.",
+        "operationId": "me_api_v1_users_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Me",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Liveness: is the process up? Kubernetes restarts the container if this fails.\nDeliberately does NOT touch the database: a DB outage should not make\nKubernetes kill every healthy app container in a restart loop.",
+        "operationId": "liveness_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Liveness",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "description": "Readiness: can we serve traffic? The load balancer stops sending requests\nto this instance while this fails, but nothing gets restarted.\n\nOnly the database decides readiness. Redis is reported, but if it's down we\nstill serve traffic (menus come from PostgreSQL, login protection pauses), so\ntaking every instance out of the load balancer would turn a small problem\ninto a full outage.",
+        "operationId": "readiness_health_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readiness",
+        "tags": [
+          "health"
+        ]
+      }
+    }
+  }
+}

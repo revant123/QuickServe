@@ -20,13 +20,15 @@ NS=quickserve
 REPO=revant123/quickserve
 
 # Is this tag published on ghcr.io? (Public package: an anonymous token is enough.)
-image_exists() {
+image_exists() { # repository, tag
   local token
-  token=$(curl -fsS "https://ghcr.io/token?scope=repository:${REPO}:pull" | sed -E 's/.*"token":"([^"]+)".*/\1/')
+  token=$(curl -fsS "https://ghcr.io/token?scope=repository:$1:pull" | sed -E 's/.*"token":"([^"]+)".*/\1/')
   curl -fsS -o /dev/null -H "Authorization: Bearer ${token}" \
     -H "Accept: application/vnd.oci.image.index.v1+json" \
-    "https://ghcr.io/v2/${REPO}/manifests/$1"
+    "https://ghcr.io/v2/$1/manifests/$2"
 }
+# Both images of a commit: the API and the customer app (Phase 13).
+images_exist() { image_exists "$REPO" "$1" && image_exists "${REPO}-app" "$1"; }
 
 if [[ "$OVERLAY" != *ci* ]]; then
   # Deploy EXACTLY the commit you have checked out: its immutable sha- tag,
@@ -35,8 +37,8 @@ if [[ "$OVERLAY" != *ci* ]]; then
   # so "deploy main" would silently run old code. A sha tag can't be stale:
   # it either exists or it doesn't.
   TAG="${IMAGE_TAG:-sha-$(git rev-parse HEAD | cut -c1-7)}"
-  if [[ -n "$(git status --porcelain -- app migrations scripts)" ]]; then
-    echo "Note: you have uncommitted changes in app/, migrations/ or scripts/. They are NOT in the image."
+  if [[ -n "$(git status --porcelain -- app migrations scripts frontend)" ]]; then
+    echo "Note: you have uncommitted changes in app/, migrations/, scripts/ or frontend/. They are NOT in the images."
   fi
   if [[ -z "${IMAGE_TAG:-}" ]] && ! git merge-base --is-ancestor HEAD origin/main 2>/dev/null; then
     echo "Your checked-out commit isn't on main (are you on a feature branch?). CI only publishes"
@@ -45,23 +47,23 @@ if [[ "$OVERLAY" != *ci* ]]; then
     exit 1
   fi
   waited=0
-  until image_exists "$TAG"; do
+  until images_exist "$TAG"; do
     if (( waited >= ${WAIT_MINUTES:-10} * 60 )); then
-      echo "ghcr.io/${REPO}:${TAG} still isn't published after ${WAIT_MINUTES:-10} minutes."
+      echo "ghcr.io/${REPO}:${TAG} and ghcr.io/${REPO}-app:${TAG} still aren't both published after ${WAIT_MINUTES:-10} minutes."
       echo "CI publishes images only for commits on main. Check the 'publish' job on GitHub Actions,"
       echo "or deploy the newest main build instead: IMAGE_TAG=main infra/k8s/deploy.sh"
       exit 1
     fi
-    echo "Waiting for CI to publish ghcr.io/${REPO}:${TAG} (checked ${waited}s so far)..."
+    echo "Waiting for CI to publish ghcr.io/${REPO}:${TAG} and ${REPO}-app:${TAG} (checked ${waited}s so far)..."
     sleep 20
     waited=$((waited + 20))
   done
-  echo "Deploying ghcr.io/${REPO}:${TAG}"
+  echo "Deploying ghcr.io/${REPO}:${TAG} and ghcr.io/${REPO}-app:${TAG}"
 
   # Render the overlay and swap the tag. (Kustomize can't take the tag from a
   # variable, and an overlay can't point at an absolute path, so a one-line
   # substitution on the rendered YAML is the simplest honest way.)
-  render() { kubectl kustomize "$OVERLAY" | sed "s#ghcr.io/${REPO}:main#ghcr.io/${REPO}:${TAG}#g"; }
+  render() { kubectl kustomize "$OVERLAY" | sed -E "s#(ghcr.io/${REPO}(-app)?):main#\1:${TAG}#g"; }
 fi
 
 # Cluster add-ons the manifests need (Phase 9): Envoy Gateway and cert-manager.
@@ -111,12 +113,13 @@ kubectl -n "$NS" wait --for=condition=complete job/migrate --timeout=300s
 # the same sha- tag means nothing changed, and nothing should restart. Only the
 # moving `main` tag (IMAGE_TAG=main) needs a restart to fetch a newer build.
 if [[ -n "$ALREADY_DEPLOYED" && "${TAG:-}" == "main" ]]; then
-  echo "Restarting the API and worker to pick up the newest image..."
-  kubectl -n "$NS" rollout restart deployment/api deployment/worker deployment/notifier
+  echo "Restarting the API, worker, notifier and app to pick up the newest images..."
+  kubectl -n "$NS" rollout restart deployment/api deployment/worker deployment/notifier deployment/web
 fi
 
-echo "Waiting for the API, the worker and the notifier..."
+echo "Waiting for the API, the worker, the notifier and the customer app..."
 kubectl -n "$NS" rollout status deployment/api --timeout=300s
+kubectl -n "$NS" rollout status deployment/web --timeout=180s
 kubectl -n "$NS" rollout status deployment/worker --timeout=300s
 kubectl -n "$NS" rollout status deployment/notifier --timeout=300s
 
@@ -143,7 +146,8 @@ kubectl -n "$NS" get pods
 echo
 echo "Deployed ($OVERLAY). The front door (Phase 9), in its own terminal:"
 echo "  kubectl -n envoy-gateway-system port-forward service/quickserve-gateway 8443:443"
-echo "  -> https://quickserve.localhost:8443/docs"
+echo "  -> https://quickserve.localhost:8443/       the customer app (Phase 13)"
+echo "  -> https://quickserve.localhost:8443/docs   the API's Swagger page"
 echo "     (the browser warns about the certificate until you trust QuickServe's local CA: see the README)"
 echo
 echo "Or the API directly:"

@@ -13,3 +13,6 @@ images:
   - name: quickserve
     newName: quickserve
     newTag: ci
+  - name: quickserve-app # the customer app (Phase 13)
+    newName: quickserve-app
+    newTag: ci

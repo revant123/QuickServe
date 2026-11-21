@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -36,7 +36,7 @@ from app.modules.menu import repository as menu_repo
 from app.modules.menu.model import MenuItem
 from app.modules.orders import repository as repo
 from app.modules.orders.model import Order, OrderItem, OrderStatus, OrderStatusEvent
-from app.modules.orders.schema import OrderCreate, TimeoutReport
+from app.modules.orders.schema import OrderCreate, OrderSummary, TimeoutReport
 from app.modules.orders.state_machine import (
     ACTORS,
     CUSTOMER_CANCELLABLE,
@@ -245,6 +245,51 @@ def get_order(db: Session, order_id: uuid.UUID, user: User) -> Order:
         raise NotFound("Order not found")
     _actor_for(db, order, user)
     return order
+
+
+def list_my_orders(db: Session, user: User, limit: int, offset: int) -> list[OrderSummary]:
+    """The customer app's "My orders": one query for the whole page.
+
+    The tempting version loads each order, then its restaurant, then its items:
+    1 + 2N queries for N orders (the N+1 problem). Here a JOIN brings the
+    restaurant's name and a correlated subquery counts the items, so a page of
+    20 orders is one round trip. ix_orders_customer_newest returns the rows
+    already newest first.
+    """
+    item_count = (
+        select(func.coalesce(func.sum(OrderItem.quantity), 0))
+        .where(OrderItem.order_id == Order.id)
+        .correlate(Order)
+        .scalar_subquery()
+    )
+    rows = db.execute(
+        select(
+            Order.id,
+            Order.restaurant_id,
+            Restaurant.name,
+            Order.status,
+            Order.grand_total,
+            item_count,
+            Order.created_at,
+        )
+        .join(Restaurant, Restaurant.id == Order.restaurant_id)
+        .where(Order.customer_id == user.id)
+        .order_by(Order.created_at.desc(), Order.id)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return [
+        OrderSummary(
+            id=r[0],
+            restaurant_id=r[1],
+            restaurant_name=r[2],
+            status=r[3],
+            grand_total=r[4],
+            item_count=r[5],
+            created_at=r[6],
+        )
+        for r in rows
+    ]
 
 
 def timeline(db: Session, order_id: uuid.UUID, user: User) -> list[OrderStatusEvent]:

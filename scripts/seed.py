@@ -89,6 +89,9 @@ PROFILES = {
     "Sindhi Sweets": ("Sweets, Street Food", 12),
     "Dosa Junction": ("South Indian", 15),
     "Momo Point": ("Tibetan, Chinese", 18),
+    "Marwar Rasoi": ("Rajasthani", 25),
+    "Kathiyawadi Thaal": ("Gujarati", 20),
+    "Seven Sisters Kitchen": ("Northeast, Assamese, Naga", 25),
 }
 # Two more (fictional) restaurants, so "near me" has something to sort. Momo
 # Point is in Mohali: too far for Sector 17 (about 8.6 km by road), so it shows
@@ -103,6 +106,25 @@ NEW_RESTAURANTS = {
         ("Veg Steamed Momos", "Eight pieces, with red chutney", "120.00", True, 80),
         ("Chicken Momos", "Eight pieces", "160.00", False, 80),
         ("Thukpa", "Tibetan noodle soup", "180.00", True, 30),
+    ],
+    # Phase 13: one restaurant for each regional theme in the customer app.
+    ("Marwar Rasoi", "Sector 21, Chandigarh", "10.00", (Decimal("30.727000"), Decimal("76.793000"))): [
+        ("Dal Baati Churma", "Baked wheat baatis, panchmel dal, sweet churma", "260.00", True, 40),
+        ("Gatte ki Sabzi", "Gram-flour dumplings in a yoghurt curry", "220.00", True, 30),
+        ("Laal Maas", "Mutton in a fiery red chilli gravy", "420.00", False, 20),
+        ("Ker Sangri", "Desert beans and berries, dry-cooked", "240.00", True, None),
+    ],
+    ("Kathiyawadi Thaal", "Sector 8, Chandigarh", "10.00", (Decimal("30.742000"), Decimal("76.802000"))): [
+        ("Gujarati Thali", "Dal, kadhi, two shaak, rotli, rice, farsan, sweet", "320.00", True, 30),
+        ("Khaman Dhokla", "Steamed gram-flour cake with green chutney", "120.00", True, 60),
+        ("Methi Thepla", "Four fenugreek flatbreads with pickle", "110.00", True, None),
+        ("Undhiyu", "Winter vegetables slow-cooked with spices", "240.00", True, 25),
+    ],
+    ("Seven Sisters Kitchen", "Sector 34, Chandigarh", "10.00", (Decimal("30.723000"), Decimal("76.768000"))): [
+        ("Assamese Thali", "Rice, dal, aloo pitika, khar, saag, pickle", "330.00", True, 30),
+        ("Masor Tenga", "Light, tangy Assamese fish curry", "360.00", False, 20),
+        ("Smoked Pork with Bamboo Shoot", "Naga style, with raja mirchi", "420.00", False, 20),
+        ("Veg Momos", "Eight pieces, with tomato chutney", "150.00", True, 80),
     ],
 }
 # Demo reviews: (stars, comment). Dosa Junction has a single 5-star review: it
@@ -124,6 +146,9 @@ DEMO_REVIEWS = {
     "Sindhi Sweets": [(4, "Fresh samosas"), (4, ""), (5, "Best chole bhature around"), (3, "A bit late")],
     "Dosa Junction": [(5, "Crisp dosa")],
     "Momo Point": [(4, "Spicy chutney, nice"), (3, ""), (4, "")],
+    "Marwar Rasoi": [(4, "Baatis soaked in ghee, just right"), (5, ""), (4, "")],
+    "Kathiyawadi Thaal": [(4, "Soft, spongy dhokla"), (4, "")],
+    "Seven Sisters Kitchen": [(5, "Masor tenga like home"), (4, ""), (5, "Bamboo shoot pork was excellent")],
 }
 REVIEWER_NAMES = ["Aman Gill", "Priya Sharma", "Rohit Verma", "Simran Kaur", "Karan Mehta"]
 
@@ -208,13 +233,18 @@ def add_phase12_data(db) -> None:
     db.commit()
 
     people = reviewers(db)
-    if db.execute(select(Review.id).where(Review.customer_id.in_([p.id for p in people]))).first() is None:
-        for name, reviews in DEMO_REVIEWS.items():
-            r = db.execute(select(Restaurant).where(Restaurant.name == name)).scalar_one()
-            # One review per order; a reviewer can have several orders.
-            for (rating, comment), reviewer in zip(reviews, cycle(people)):
-                deliver_and_review(db, r, reviewer, owner, rider, rating, comment)
-        print("Added demo reviews (through real orders)")
+    added = []
+    for name, reviews in DEMO_REVIEWS.items():
+        r = db.execute(select(Restaurant).where(Restaurant.name == name)).scalar_one()
+        # Per restaurant, so restaurants added later (Phase 13) get theirs too.
+        if db.execute(select(Review.id).where(Review.restaurant_id == r.id)).first() is not None:
+            continue
+        # One review per order; a reviewer can have several orders.
+        for (rating, comment), reviewer in zip(reviews, cycle(people)):
+            deliver_and_review(db, r, reviewer, owner, rider, rating, comment)
+        added.append(name)
+    if added:
+        print("Added demo reviews (through real orders) for " + ", ".join(added))
 
 
 def print_discovery_examples() -> None:

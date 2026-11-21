@@ -133,3 +133,26 @@ spec:
         - podSelector: { matchLabels: { app.kubernetes.io/name: postgres } }
       ports:
         - { protocol: TCP, port: 5432 }
+---
+# The customer app (Phase 13): only the Gateway may reach it, and it may reach
+# nothing but DNS (baseline.yaml): static files don't need to call anyone. The
+# browser calls the API through the Gateway, never through this pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: web }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system }
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: quickserve
+              gateway.envoyproxy.io/owning-gateway-namespace: quickserve
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress: []

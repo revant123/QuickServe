@@ -1,0 +1,5 @@
+node_modules/
+dist/
+src/photos/*
+!src/photos/README.md
+*.log
