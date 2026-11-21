@@ -70,6 +70,10 @@ REVIEWS = Counter("quickserve_reviews_total", "Reviews posted (committed), by st
 PAYMENTS = Counter("quickserve_payments_total", "Payment attempts recorded, by outcome", ["outcome"])
 MENU_CACHE = Counter("quickserve_menu_cache_requests_total", "Customer menu reads, by cache result", ["result"])
 LOGINS = Counter("quickserve_logins_total", "Login attempts, by outcome", ["outcome"])
+# Phase 15: requests where the same SQL statement ran many times (see app/core/tracing.py).
+SUSPECTED_N_PLUS_ONE = Counter(
+    "quickserve_suspected_n_plus_one_total", "Requests that ran one SQL statement many times, by route", ["route"]
+)
 
 # ---------- Background worker ----------
 

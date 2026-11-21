@@ -34,6 +34,10 @@ class OutboxEvent(Base):
     # ("event-carried state transfer"). A real separate service couldn't.
     payload: Mapped[dict] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Phase 15: the W3C traceparent of the request that wrote the event, so the
+    # notifier's work continues the SAME trace, seconds or hours later. A message
+    # queue would carry it as a message header; a table carries it as a column.
+    trace_parent: Mapped[str | None] = mapped_column(String(55))
 
     # Delivery bookkeeping, written only by the notifier.
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

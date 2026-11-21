@@ -19,6 +19,8 @@ import uuid
 from contextvars import ContextVar
 from datetime import UTC, datetime
 
+from opentelemetry import trace
+
 from app.core.config import get_settings
 
 # A ContextVar is like a global variable that's separate for every request,
@@ -48,6 +50,9 @@ class JsonFormatter(logging.Formatter):
         request_id = getattr(record, "request_id", None)
         if request_id:
             line["request_id"] = request_id
+        trace_id = getattr(record, "trace_id", None)
+        if trace_id:
+            line["trace_id"] = trace_id
         fields = getattr(record, "fields", None)
         if fields:
             line.update(fields)
@@ -78,6 +83,10 @@ def _record_factory(*args, **kwargs) -> logging.LogRecord:
     # or a test that inspects records afterwards).
     record = _default_record_factory(*args, **kwargs)
     record.request_id = request_id_var.get()
+    # Phase 15: the trace ID too, so a log line leads straight to its trace in
+    # Jaeger, and a slow trace leads to its log lines.
+    span = trace.get_current_span().get_span_context()
+    record.trace_id = format(span.trace_id, "032x") if span.is_valid else None
     return record
 
 

@@ -39,8 +39,9 @@ from prometheus_client.parser import text_string_to_metric_families
 from app.core.config import get_settings
 from app.core.logging import configure_logging, log_event
 from app.core.metrics import WORKER_RUNS, WORKER_TIMEOUTS, start_metrics_server, worker_heartbeat
+from app.core.tracing import configure_tracing, tracer
 from app.database import models  # noqa: F401  (registers every model with SQLAlchemy)
-from app.database.session import SessionLocal
+from app.database.session import SessionLocal, engine
 from app.modules.orders.schema import TimeoutReport
 from app.modules.orders.service import run_timeouts
 
@@ -49,8 +50,13 @@ stop_requested = threading.Event()
 
 
 def run_once() -> TimeoutReport:
-    with SessionLocal() as db:
+    # One trace per pass (Phase 15). Every 30 seconds that's ~2,900 small traces
+    # a day per worker, cheap enough to keep. An order rejected here writes an
+    # outbox event, so the refund notification continues this same trace.
+    with tracer.start_as_current_span("worker.timeouts") as span, SessionLocal() as db:
         report = run_timeouts(db)
+        span.set_attribute("quickserve.orders.payment_expired", report.payment_expired)
+        span.set_attribute("quickserve.orders.auto_rejected", report.auto_rejected)
     WORKER_TIMEOUTS.labels("payment_expired").inc(report.payment_expired)
     WORKER_TIMEOUTS.labels("auto_rejected").inc(report.auto_rejected)
     level = logging.INFO if (report.payment_expired or report.auto_rejected) else logging.DEBUG
@@ -119,6 +125,7 @@ def main() -> None:
         sys.exit(0 if healthcheck(settings.worker_metrics_port, 3 * settings.worker_interval_seconds + 30) else 1)
 
     configure_logging()
+    configure_tracing("quickserve-worker", engine=engine)
     if args.once:
         run_once()
         return

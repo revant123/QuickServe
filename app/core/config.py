@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     # 0 turns the metrics server off (tests do this). The API and the worker need
     # different ports when they run on the same machine.
     metrics_port: int = 9100
+    # Tracing (Phase 15). Off by default (tests, a bare `uvicorn` run); Compose
+    # and Kubernetes turn it on. Where spans go and how many requests are traced
+    # come from the standard OTEL_* environment variables (see app/core/tracing.py).
+    tracing_enabled: bool = False
+    # A request that runs the same SQL statement this many times is flagged as a
+    # suspected N+1 (a log line, a metric and a span attribute).
+    n_plus_one_threshold: int = 10
     worker_metrics_port: int = 9101
     notifier_metrics_port: int = 9102
 
