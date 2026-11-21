@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, OpenTelemetry and Jaeger, GitHub Actions; React + TypeScript apps for customers, restaurants and riders (Vite, TanStack Query) served by nginx. **285 backend tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages, plus **52 frontend tests** and end-to-end browser journeys.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, OpenTelemetry and Jaeger, GitHub Actions (deploying every merge to AWS through OIDC), Caddy with Let's Encrypt; React + TypeScript apps for customers, restaurants and riders (Vite, TanStack Query) served by nginx. **290 backend tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages, plus **52 frontend tests** and end-to-end browser journeys.
 
 ---
 
@@ -39,6 +39,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
    - [Customer app (Phase 13)](#customer-app-phase-13)
    - [Restaurant and rider apps (Phase 14)](#restaurant-and-rider-apps-phase-14)
    - [Tracing (Phase 15)](#tracing-phase-15)
+   - [Live on AWS (Phase 16)](#live-on-aws-phase-16)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -243,6 +244,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
 | Restaurant and rider apps (Phase 14) | [Partner and rider Q&A](#restaurant-and-rider-apps-phase-14); `app/modules/orders/dispatch.py` (pool, claim, rider's day), `app/modules/orders/kitchen.py` (order board, sales and payout), the delivery code in `app/modules/orders/service.py`, `frontend/src/partner/`, `frontend/src/rider/`, `tests/test_partners.py` |
 | Tracing (Phase 15) | [Tracing Q&A](#tracing-phase-15); `app/core/tracing.py` (setup, SQL spans, N+1 detector, trace helpers), `trace_parent` in `app/modules/outbox/`, `app/notifier.py`, `infra/k8s/tracing/` (Jaeger v2 and its config), `scripts/trace_check.py`, `tests/test_tracing.py` |
+| Live on AWS with continuous deployment (Phase 16) | [Live on AWS Q&A](#live-on-aws-phase-16); [infra/README.md](infra/README.md#phase-16-live-with-https-and-automatic-deploys) (step by step); `infra/modules/app_server/templates/` (Caddyfile, boot script with blue/green `deploy.sh`), `infra/modules/github_deploy/` (OIDC role), the `deploy` job in `.github/workflows/ci.yml`, `scripts/live_deploy.sh`, `scripts/live_check.py` |
 | Customer app (Phase 13) | [Customer app Q&A](#customer-app-phase-13); `frontend/` (React + TypeScript, types generated from `frontend/openapi.json`, nginx with CSP and cache headers), `infra/k8s/base/web.yaml`, the `web` route in `infra/k8s/gateway/routes.yaml`, `GET /orders` and `GET /restaurants/{id}`, `tests/test_openapi_contract.py`, `tests/test_app_endpoints.py`, the `frontend` job in CI |
 | Discovery: near me, search, ratings (Phase 12) | [Discovery Q&A](#discovery-near-me-search-and-ratings-phase-12); `app/modules/discovery/` (near me, ETA, Bayesian rating, search), `app/modules/reviews/`, `app/modules/pricing/geo.py` (bounding box), `tests/test_discovery.py`, `tests/test_reviews.py` |
 | Pricing, coupons and surge (Phase 11) | [Pricing Q&A](#pricing-like-zomato-and-swiggy-phase-11); `app/modules/pricing/` (calculator, geo, rain switch), `app/modules/coupons/`, `POST /orders/quote`, `tests/test_pricing.py`, `tests/test_checkout.py` |
@@ -252,7 +254,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Notification service with the outbox pattern (Phase 8) | [Outbox Q&A](#notifications-and-the-outbox-pattern-phase-8); `app/modules/outbox/`, `app/modules/notifications/`, `app/notifier.py`, `infra/k8s/base/notifier.yaml`, `tests/test_notifications.py` |
 | Monitoring and alerts (Phase 7b) | [Monitoring Q&A](#monitoring-phase-7b); `app/core/metrics.py`; `infra/k8s/monitoring/` (Prometheus config, `rules.yml` + `rules_test.yml`, Grafana dashboard); worker `--healthcheck`; `tests/test_metrics.py` |
 | Kubernetes (Phase 7) | [Kubernetes Q&A](#kubernetes-phase-7); `infra/k8s/` (Kustomize base + overlays, `deploy.sh`, `smoke_test.py`); `scripts/wait_for_migrations.py`; the `kubernetes` job in CI (kind cluster, zero-downtime rollout check) |
-| AWS infrastructure as code (Phase 6) | [AWS and Terraform Q&A](#aws-and-terraform-phase-6); `infra/` with [infra/README.md](infra/README.md); 18 `terraform test` checks; the `terraform` job in CI |
+| AWS infrastructure as code (Phase 6) | [AWS and Terraform Q&A](#aws-and-terraform-phase-6); `infra/` with [infra/README.md](infra/README.md); 26 `terraform test` checks (since Phase 16); the `terraform` job in CI |
 | Image published to a registry (Phase 5b) | [Registry Q&A](#q-where-does-the-image-go-after-ci-builds-it); the `publish` job in `.github/workflows/ci.yml`; `ghcr.io/revant123/quickserve` |
 | Dockerfile and the whole stack in Docker (Phase 5) | [Docker Q&A](#docker-the-app-in-containers-phase-5); `Dockerfile`, `.dockerignore`, `docker-compose.yml` (profile `app`), `requirements.lock`, [docs/docker.md](docs/docker.md), the `docker` job in CI |
 | Redis cache, rate limiting, logout, worker, JSON logs (Phase 4) | [Section 8](#8-redis-the-background-worker-and-logs-phase-4); `app/core/redis.py`, `app/core/logging.py`, `app/worker.py`, `app/modules/menu/cache.py` |
@@ -3473,6 +3475,219 @@ Things to try:
 
 ---
 
+### Live on AWS (Phase 16)
+
+Until now QuickServe ran on your laptop and in CI's throwaway clusters. Phase 16 puts it on the internet, at an HTTPS address you can send to anyone. It does that with the Phase 6 Terraform and **one server**, and from then on GitHub Actions ships every merge to main by itself:
+
+```mermaid
+flowchart LR
+    M[Merge to main] --> CI[CI: tests, Docker, Kubernetes, Terraform]
+    CI --> P[Publish images<br/>sha-&lt;commit&gt;]
+    P --> D[Deploy job<br/>OIDC, no keys]
+    D -->|SSM: quickserve-deploy<br/>tag=sha-...| S[deploy.sh on the server]
+    S --> C{new API ready?}
+    C -- no --> K[remove it<br/>old version keeps serving]
+    C -- yes --> W[swap: Caddy sends traffic<br/>to the new container]
+    W --> T[smoke test<br/>the live URL]
+    T -- fails --> R[roll back to the<br/>previous version]
+    T -- passes --> L[live]
+```
+
+On the server, Caddy is the only thing with public ports:
+
+```
+internet ──443/80──► Caddy (Let's Encrypt certificate, HSTS, request IDs)
+                       ├─► quickserve-api-blue  or  quickserve-api-green  (/api, /docs, /health)
+                       └─► quickserve-web  (the React app: customer, partner and rider screens)
+worker, notifier, Redis and Jaeger run beside them. Jaeger's UI listens on 127.0.0.1 only.
+PostgreSQL is RDS, in a private subnet (Phase 6).
+```
+
+### Q: Is this continuous delivery or continuous deployment?
+
+Deployment, and the difference matters. In Martin Fowler's definitions, continuous deployment sends every change through the pipeline and into production automatically. Continuous delivery only means you're *able* to deploy at any time, and the business may choose a slower pace [137]. Jez Humble, co-author of *Continuous Delivery*, adds that continuous deployment implies continuous delivery, but not the other way round [138].
+
+QuickServe does continuous deployment: no human presses "deploy". That's only safe because of everything before it. Phases 1 to 15 built about 300 tests, a Docker check, a full Kubernetes run and Terraform tests, and the deploy job waits for all of them. The rest of this section is about the other half: making each deploy **boring**, **reversible** and **checked**.
+
+To measure how well this works, the industry uses the four DORA metrics: deployment frequency, lead time for changes, change failure rate and failed deployment recovery time [139]. In QuickServe's terms:
+- Deployment frequency is every merge.
+- Lead time is the length of one CI run (about 20 minutes).
+- Change failure rate is how often the smoke test triggers a rollback.
+- Recovery time is one rollback (about a minute).
+
+### Q: How does GitHub log in to AWS without a password or access key?
+
+With **OIDC** (OpenID Connect), and it's the most important security decision in this phase. The old way was to create an IAM user, generate an access key and paste it into GitHub secrets. That key works from anywhere, forever, until someone notices it leaked. AWS's own IAM best practices say the opposite: workloads should get temporary credentials through IAM roles [140]. The Well-Architected Framework lists long-term access keys for machines, where temporary credentials would work, as an anti-pattern [141]. GitHub documents OIDC as the way for workflows to reach AWS without keeping AWS credentials as long-lived secrets [142].
+
+How it works on every deploy:
+1. The deploy job asks GitHub for a signed token that says which repository and environment it is (`permissions: id-token: write`).
+2. AWS checks the signature, then checks the claims against the role's trust policy (`infra/modules/github_deploy`).
+3. If they match, AWS hands out credentials that expire within the hour. There's nothing stored anywhere to leak.
+
+The trust policy is an **exact match**, with no wildcards:
+
+```
+token.actions.githubusercontent.com:aud = sts.amazonaws.com
+token.actions.githubusercontent.com:sub = repo:revant123@149621150/QuickServe@1461084605:environment:production
+```
+
+The numbers are there because of a GitHub change: repositories created after July 15, 2026 get a new default subject that includes the owner's and the repository's numeric IDs, written as `owner@id/name@id` [143]. QuickServe was created in November 2026, so its tokens use that format.
+
+**This was nearly a bug.** The old name-only format (`repo:revant123/QuickServe:...`), which most tutorials still show, would have made AWS refuse every deploy. Reading the current documentation caught it before any test could. The IDs are also safer: if this repository were ever deleted and someone else created one with the same name, their tokens would carry different numbers.
+
+Because the subject names the **environment**, a pull request can't get credentials (it doesn't run in `production`), and neither can a workflow on any other branch. Terraform tests check all of this: no wildcards, the exact subject, and only `ssm:` actions.
+
+### Q: What can the deploy role actually do?
+
+Much less than "deploy". The tempting setup is to let the role run `AWS-RunShellScript` on the server. That would mean anyone who can push to main has root on the server, with any command they like. Instead, Terraform creates **one SSM document**, `quickserve-dev-deploy`, which runs `/opt/quickserve/deploy.sh {{ tag }}` and nothing else. Its `tag` parameter has an `allowedPattern` of `^(sha-[0-9a-f]{7,40}|rollback)$`. According to AWS, input that doesn't match the pattern stops the command before it starts, and the pattern is checked twice: by the API, and again by the agent on the server [144]. So `sha-abc1234; rm -rf /` never reaches a shell. A Terraform test proves real tags pass and these don't: `main`, `sha-$(id)`, a tag with a newline, and a 6-digit sha.
+
+The role's whole permission list:
+
+| Action | On |
+|---|---|
+| `ssm:SendCommand` | this one server **and** this one document |
+| `ssm:GetParameter` | `/quickserve/dev/deploy_target` (which server and document to use; Terraform keeps it current) |
+| `ssm:GetCommandInvocation`, `ssm:ListCommandInvocations` | `*` (read-only; IAM can't narrow these) |
+
+There's no EC2 access, no IAM access and no secrets. The server reads its own secrets from Parameter Store at deploy time, as in Phase 6.
+
+### Q: How does a deploy avoid downtime on one server?
+
+With **blue/green** inside one machine. In Fowler's description, blue/green means keeping two production environments that are as alike as possible, with only one of them live at any time, so the cut-over is a switch rather than an install [145]. On one small server the two environments are two API containers, `quickserve-api-blue` and `quickserve-api-green`. `deploy.sh` (in `infra/modules/app_server/templates/user_data.sh.tftpl`) does this:
+
+1. **Pull both images first.** If a pull fails, nothing has changed.
+2. **Run the migrations** (`alembic upgrade head`) in a one-off container.
+3. **Start the new colour** next to the old one, then poll its `/health/ready` for up to 60 seconds. If it never gets ready, the script deletes it, prints its last log lines and exits with an error. **The old colour never stopped serving.**
+4. **Let Caddy switch.** Caddy always lists both colours, checks each one's `/health/ready` every 2 seconds, and sends traffic only to a healthy one (`lb_policy first`, `health_uri`). These are Caddy's active health checks and load-balancing retries [146].
+5. **Stop the old colour** with `docker stop -t 20`. SIGTERM lets requests already in progress finish. A request that can't connect during the swap is retried for up to 10 seconds (`lb_try_duration`) instead of failing.
+6. **Swap the worker, notifier and web containers.** Then record the new tag (and keep the previous one for rollback) and delete old images so the 16 GB disk doesn't fill up.
+
+**Tested, not assumed.** Before writing this, I ran the real boot script in a sandbox against a local PostgreSQL, with a stand-in for the AWS CLI, while 4 threads requested `/health/ready`, a restaurant search, the home page and `/health` every 20 ms:
+
+| What happened | Requests during it | Failures |
+|---|---|---|
+| Deploy a new version (with a migration: Phase 15's `trace_parent` column) | 11,364 | **0** (the answers switch from the old commit to the new one partway through) |
+| Deploy a version whose API never gets ready | 12,950 | **0**: rejected after 60 s, the old version kept serving |
+| Deploy a tag that doesn't exist | n/a | the pull fails, nothing changes |
+| Roll back | 11,198 | **0** |
+
+One limit: once a request has reached a backend, Caddy by default retries it only if it's a GET, because repeating anything else could repeat its effect [146]. A POST (placing an order) that's in flight on the old container finishes there, because `docker stop` waits for it, but a POST that hits a connection reset can fail. That's a reason the payment endpoint takes an `Idempotency-Key` (Phase 2): the app can safely retry it.
+
+### Q: What about the database during a deploy?
+
+It's the hard part of blue/green. For a few seconds the **old** code runs against the **new** schema, and after a rollback it does so indefinitely. The rule that makes this safe is **expand, then contract**, which Fowler calls parallel change: a breaking change is split into three steps (expand, migrate, contract) so that old and new versions can run at the same time [147].
+- **Expand:** add the new column or table, nullable or with a default, and keep the old one.
+- **Migrate:** the new code uses the new column. The old code ignores it.
+- **Contract:** drop the old column in a **later** deploy, once no running code reads it.
+
+Every QuickServe migration so far has been an expand. Phase 15's `trace_parent`, for example, is a nullable column that the Phase 14 code doesn't know about. The rollback test above ran exactly that: the Phase 14 code ran happily on the Phase 15 schema.
+
+That's also why **a rollback skips the migrations**. The older code has never heard of the newer revisions (Alembic would stop with "can't locate revision"), and it doesn't need them undone. A downgrade that drops a column would destroy data written since the deploy. Rolling back code is cheap and safe, while rolling back a schema is neither.
+
+### Q: How does the site get HTTPS?
+
+**Caddy** does it by itself. Its automatic HTTPS gets certificates for every site in the config, keeps them renewed and redirects HTTP to HTTPS, with no extra setup [148]. Given a host name, it talks to Let's Encrypt, proves it controls the name, installs the certificate and renews it before it expires. The certificates live in a Docker volume, so a restart doesn't request new ones.
+
+The proof is the **HTTP-01 challenge**: Let's Encrypt asks for a file at `http://<domain>/.well-known/acme-challenge/<token>`. Let's Encrypt only does this check on port 80: the ACME standard doesn't allow other ports, because that would be less secure [149]. That's why the security group opens port 80 even though everything is HTTPS. If you restrict `allowed_http_cidrs` to your own IP, Let's Encrypt can't reach the server either, and you get no certificate. Terraform's variable description warns about this.
+
+The name comes from **DuckDNS**, which is free. Two things make it work well:
+- **It updates itself.** The server sets its own DNS record on every boot (`update-dns.sh` with your token from Parameter Store, run by a systemd unit), because a stopped and started EC2 instance gets a new public IP.
+- **Rate limits are per name.** Let's Encrypt decides what counts as one domain from the Public Suffix List [150], and duckdns.org is on that list [151]. So `quickserve-you.duckdns.org` gets its own allowance instead of sharing duckdns.org's with thousands of others. The limit that can still bite is asking for the same certificate again and again: that allowance refills by only one certificate every 34 hours [150]. Apply and destroy a dozen times in one day and you'll wait. For a 1–2 week demo it never comes up.
+
+The smoke test checks the result from outside, every deploy:
+- the certificate is valid for more than 7 days, verified like a browser does;
+- `http://` returns a 308 redirect to `https://`;
+- the `Strict-Transport-Security` header is set.
+
+### Q: Why one server instead of EKS, if Phase 7 was all about Kubernetes?
+
+Because of money, which is FinOps' whole point. The Amazon EKS control plane alone costs USD 0.10 per cluster per hour [152], about USD 73 a month before a single worker node. You'd also pay for nodes, a load balancer, and NAT or VPC endpoints so private nodes can pull images.
+
+QuickServe's live stack, with prices from `infra/README.md` (Mumbai region, on-demand):
+
+| | Per hour | 2 weeks |
+|---|---|---|
+| `t4g.small` server (2 Graviton vCPUs, 2 GiB) | ≈ $0.011 | ≈ $3.70 |
+| RDS `db.t4g.micro` PostgreSQL | ≈ $0.021 | ≈ $7.05 |
+| Public IPv4 address (charged since February 2024 [153]) | $0.005 | ≈ $1.70 |
+| Disks (16 GB + 20 GB gp3) | | ≈ $1.50 |
+| DuckDNS, Let's Encrypt, Parameter Store, Session Manager | free | $0 |
+| **Total** | **≈ $0.04** | **≈ $14** |
+
+The same two weeks of an EKS control plane alone would be about $34. The Kubernetes manifests aren't wasted. They're what you'd move to when one server stops being enough, and CI still deploys them to a real cluster on every pull request. That's the trade-off an SDE-1 should be able to explain: **pick the smallest thing that meets the need, and know what you'd change at which scale.**
+
+A few smaller FinOps decisions on the server:
+- **Swap instead of a bigger server.** A deploy briefly runs two API containers. 1 GiB of swap on the disk you already pay for absorbs that spike. A `t4g.medium` would double the server bill for RAM used for 30 seconds per deploy.
+- **Standard CPU credits** (Phase 6). The server slows down instead of billing for extra burst.
+- **Image cleanup.** Only the current and previous versions are kept on disk.
+- **Jaeger keeps 10% of ordinary traces** (`trace_sample_percent`), plus every error and slow request.
+
+### Q: What does the smoke test check, and what happens when it fails?
+
+`scripts/live_check.py` uses only the standard library, so it runs anywhere Python runs. It retries for up to 2 minutes, then checks:
+
+1. `/health` reports **the commit just deployed**. That's why the image now has a `GIT_SHA` build argument and `/health` returns `commit`. Without this, the old container still answering would look like a successful deploy.
+2. `/health/ready` reports the database as reachable.
+3. `/` is the React app.
+4. A real API call (restaurants near Sector 22) works, which tests the API, PostgreSQL and the routing together.
+5. HTTPS: the certificate is valid, HTTP redirects to HTTPS, and the HSTS header is set.
+
+If any check fails after a successful deploy, the job runs `live_deploy.sh rollback`, checks again, and the run goes red. The rollback works the same way as a deploy (blue/green, no downtime) but skips the migrations. If the **deploy** itself failed (the new API never got ready), there's nothing to roll back, because the old version never stopped. The job's summary shows the table of checks either way.
+
+Two GitHub Actions details keep this safe:
+- **Deploys never cancel each other.** Before this phase, the whole CI workflow cancelled an older run when a newer one started (FinOps for CI minutes). On main that could cut off a deploy before its smoke test or rollback, so cancelling now happens only on branches. The deploy job has its own `concurrency: production` queue.
+- **No AWS variables, no deploy.** The job runs only on pushes to main, and only when the repository variable `AWS_DEPLOY_ROLE_ARN` exists. Before you apply Terraform, and after you destroy it, the job is skipped rather than failing.
+
+### Q: What about the demo passwords in this README?
+
+On a laptop they're fine. On the internet they'd let anyone sign in as the demo admin. So `scripts/seed.py` now refuses to run outside `local`, `test` and `ci` unless it gets `SEED_CUSTOMER_PASSWORD` and `SEED_STAFF_PASSWORD`, each at least 12 characters (and the reviewer accounts get random passwords there too). Terraform generates both and stores them in Parameter Store. `/opt/quickserve/seed.sh` on the server reads them and passes them into the container without putting them on a command line. The seed output prints `$SEED_STAFF_PASSWORD` instead of the value, so it never lands in a log.
+
+- **Customer password:** fine to share with someone trying the app (`terraform output -raw demo_customer_password`).
+- **Staff password** (owner, rider, admin): for you only.
+
+A test covers both the refusal and the split. On the simulated server, the live password logged in and the public `customer-pass-123` got 401.
+
+### Q: Which bugs did this phase find?
+
+**Caddy couldn't start on the real network layout.** Caddy needs a fixed IP so the API can trust its `X-Forwarded-For` (Phase 9's "trust exactly one hop": `TRUSTED_PROXY_CIDRS=172.30.0.2/32`). On the first simulated boot, `docker run --ip 172.30.0.2` failed with "Address already in use". Docker hands out addresses in order, so the first container started on the network had taken .2. On the real server that would have been Redis, and HTTPS would never have come up. **Fix:** create the network with `--ip-range 172.30.0.128/25`, so automatic addresses start at .128 and .2 stays free. Then a request carrying a forged `X-Forwarded-For: 6.6.6.6` was logged with its real address, not the forged one.
+
+**The boot script was too big for EC2.** With the Caddy and Jaeger configs inside, the rendered script is about 15.4 KB. EC2 accepts at most 16 KB of user data, measured before base64 encoding [154], so one more feature would have broken `terraform apply`. **Fix:** Terraform sends it gzip-compressed (`base64gzip`). cloud-init recognises gzip-compressed user data and unpacks it before running it, a feature meant for exactly this size limit [155]. It's about a third of the size now, and a Terraform test fails if it ever gets near the limit again.
+
+**The OIDC subject format**, described above: found by reading the docs, not by a test.
+
+### Q: How do I deploy it?
+
+Step by step in [infra/README.md](infra/README.md#phase-16-live-with-https-and-automatic-deploys). In short:
+
+1. Create a free DuckDNS name and copy your token.
+2. Put `domain` and `duckdns_token` in `terraform.tfvars`, then run `terraform apply` (about 10 minutes, mostly the database).
+3. Run the `gh variable set ...` lines that `terraform output github_setup_commands` prints. From then on, every merge deploys itself.
+4. Seed: `aws ssm start-session ...`, then `sudo /opt/quickserve/seed.sh`.
+5. Open `https://quickserve-you.duckdns.org`. To see live traces, `terraform output -raw jaeger_tunnel_command` opens Jaeger at http://localhost:16686 through Session Manager.
+6. When you're done: `gh variable delete AWS_DEPLOY_ROLE_ARN`, then `terraform destroy`.
+
+### Q: How is it tested?
+
+- **Backend:** 290 tests (5 new):
+  - `/health` reports the version and commit;
+  - the seed refuses public passwords on a live server and splits customer and staff passwords.
+- **Terraform** (mock AWS, free, on every pull request):
+  - `github_deploy`: an exact subject with no wildcards, the immutable ID format, only `ssm:` actions, the read-only `*` statement;
+  - `app_server`: user data under 16 KB, Caddy on 80/443 only, Jaeger on localhost, the trusted proxy IP, and the deploy document's tag pattern (real tags pass, injection attempts fail);
+  - `envs/dev`: ports 80 and 443 only, the new secrets are SecureStrings, `deploy_target` points at the deploy document, the site URL is HTTPS with a domain.
+- **The boot script:** shellcheck on the script and on each script it writes. It also ran for real in a sandbox: first boot, a blue/green deploy, a failed deploy, a missing image and a rollback, each under load (the table above). The smoke test ran against it with Caddy's local certificate authority.
+- **CI:** the deploy job runs on main once the repository variables exist. Until then it's skipped, so this PR's CI proves everything up to the deploy.
+
+### Q: What's not built yet?
+
+- **Staging.** Real teams deploy to staging first, run heavier tests there, then promote the same image. It's the same Terraform with a second `envs/staging`, at twice the cost.
+- **Canary releases.** Send 5% of traffic to the new version and watch the error rate before switching everyone.
+- **A manual approval gate.** GitHub environments can require a reviewer before `production` runs, which turns continuous deployment back into continuous delivery with one click.
+- **Alerts from the live server.** Prometheus, Grafana and Alertmanager run in Kubernetes, but not on the single server. CloudWatch agent or Grafana Cloud's free tier would cover it.
+- **Backups you've tested.** RDS keeps automatic backups, but a restore you've never tried isn't a backup plan.
+
+---
+
 ## 9. DevOps already in the project
 
 ### Q: Why do the tests use a real PostgreSQL instead of SQLite?
@@ -3660,6 +3875,10 @@ These are real, and they make better interview stories than any feature list.
 
 **11. Tracing that silently traced nothing, then lost its SQL (Phase 15).** The first tracing test asserted that a request's trace contains SQL spans, and it found none. OpenTelemetry's SQLAlchemy instrumentation supports only versions below 2.1. On SQLAlchemy 2.1.9 it logs one warning and installs nothing, without raising any error. **Fix:** about 40 lines of our own on SQLAlchemy's cursor events. The next test found a subtler gap. The notifier's events landed in the right trace, but with no SQL inside them, because the "suppress instrumentation" flag used while polling was still in the current context, and the new span inherited it. **Fix:** attach the saved trace context (built from an empty one) before starting the span. The lesson: **observability code fails quietly. Test that the telemetry exists, not just that the app works.**
 
+**12. Caddy's fixed address was already taken (Phase 16).** The API trusts `X-Forwarded-For` only from Caddy's fixed IP, 172.30.0.2. The first simulated boot failed with "Address already in use": Docker gives out addresses in order, and the first container on the network had already taken .2 (on the real server that would have been Redis, so HTTPS would never have come up). **Fix:** create the network with `--ip-range 172.30.0.128/25`, so automatic addresses start at .128. The lesson: **run the deploy script for real before the first real deploy.** It took an afternoon in a sandbox with a fake AWS CLI, and found a bug no unit test could.
+
+**13. The boot script was 600 bytes from EC2's limit (Phase 16).** With the Caddy and Jaeger configs embedded, the user data was 15.4 KB, and EC2 refuses more than 16 KB. **Fix:** send it gzip-compressed (cloud-init unpacks it), plus a Terraform test on the size, so the next feature fails in CI and not halfway through `terraform apply`.
+
 ---
 
 ## 12. Project structure and API
@@ -3708,8 +3927,10 @@ quickserve/
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   ├── trace_check.py            places an order and checks its trace in Jaeger (Phase 15)
+│   ├── live_deploy.sh            deploy (or roll back) the live AWS server through SSM (Phase 16)
+│   ├── live_check.py             smoke test of the live site after each deploy (Phase 16)
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        285 tests, real PostgreSQL and Redis
+├── tests/                        290 tests, real PostgreSQL and Redis
 ├── frontend/                     the apps (Phases 13-14): React + TypeScript (Vite)
 │   ├── src/api/                  openapi-fetch client, generated schema.d.ts, TanStack Query hooks
 │   ├── src/pages/                customer: home, search, menu, cart, order, my orders, login
@@ -3720,7 +3941,7 @@ quickserve/
 │   ├── openapi.json              the API contract, exported by scripts/export_openapi.py
 │   ├── Dockerfile, nginx.conf    static files on nginx-unprivileged; CSP and cache headers
 │   └── scripts/check-size.mjs    150 KB JavaScript budget, enforced in CI
-├── infra/                        Terraform for AWS (Phase 6); start with infra/README.md
+├── infra/                        Terraform for AWS (Phases 6 and 16); start with infra/README.md
 │   ├── k8s/                      Kubernetes (Phase 7): base/ manifests, overlays/ (lite = Mac default, local = full,
 │   │                             ci, ci-lite), components/lite, deploy.sh,
 │   │                             smoke_test.py, rightsizing.py (Phase 8b: requests vs real use)
@@ -3732,9 +3953,10 @@ quickserve/
 │   │   └── tracing/              Jaeger v2 and its collector config, shared with Docker Compose (Phase 15)
 │   ├── bootstrap/                budget alert + S3 state bucket, once per account
 │   ├── envs/dev/                 network, database, secrets, app server (+ tests/)
-│   └── modules/                  budget, network, database, app_server (each with tests/)
+│   └── modules/                  budget, network, database, app_server (Caddyfile + boot script with
+│                                 blue/green deploy.sh), github_deploy (OIDC role); each with tests/
 ├── docs/docker.md                the Dockerfile explained line by line
-├── .github/workflows/ci.yml      six jobs: test, frontend, docker, publish (two images to ghcr.io), terraform, kubernetes (kind)
+├── .github/workflows/ci.yml      seven jobs: test, frontend, docker, publish (two images to ghcr.io), terraform, kubernetes (kind), deploy (Phase 16)
 ├── Dockerfile                    two-stage image, runs as user "app"
 ├── .dockerignore                 keeps venv/, .git/, tests and .env out of the image
 ├── docker-compose.yml            db + redis; profile "app" adds migrate, api, worker, notifier, jaeger and more
@@ -3814,7 +4036,7 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **13. Frontend: customer app** (done) | React + TypeScript (Vite): near me, search, menu, cart, the checkout bill from `/orders/quote` with price-change handling, pay with one idempotency key per attempt, live order status, reviews, my orders; a royal Indian menu theme with regional borders; nginx with CSP and immutable caching, served on the same origin through the Gateway; a 150 KB JavaScript budget in CI | API types generated from OpenAPI with contract tests, server vs client state, token storage trade-offs, open redirects, HTTP caching, performance budgets, accessibility |
 | **14. Restaurant and rider apps** (done) | Partner app: order board with the accept countdown, reject reasons, menu switches and restocks, the day's sales with commission and payout, restaurant-funded offers, accepting-orders switch. Rider app: pool without addresses, race-safe claims, one active delivery per rider (partial unique index), pickup once ready, delivery with the customer's code (limited tries), earnings | Pull vs push dispatch, conditional UPDATE races, partial unique indexes, secure random codes and brute-force limits, aggregate FILTER, business days and time zones, payout maths |
 | **15. Tracing** (done) | OpenTelemetry traces from Envoy through the API, SQL, Redis, the outbox and the notifier, viewed in Jaeger v2; trace IDs in logs, responses and error messages; tail sampling (errors, slow, N+1, a share of the rest); an N+1 detector; CI checks one order's trace end to end | Distributed tracing, context propagation through the outbox, the cost of tracing |
-| **16. Live on AWS** (next) | Apply the Phase 6 Terraform, a real domain with a Let's Encrypt certificate, GitHub Actions deploying after each merge, a smoke test against the live URL, then `terraform destroy` | Continuous delivery, real cloud costs, why one server instead of EKS |
+| **16. Live on AWS** (done; applying it is your call) | Caddy with Let's Encrypt on a free DuckDNS name, blue/green API containers on one server (tested under load: zero failed requests across deploy, failed deploy and rollback), GitHub Actions deploying every merge through OIDC and a locked-down SSM document, a smoke test of the live URL with automatic rollback, live demo passwords from Parameter Store, Jaeger through a Session Manager tunnel | Continuous deployment vs delivery, OIDC instead of access keys, expand/contract migrations, ACME and rate limits, why one server instead of EKS |
 
 ---
 
@@ -3825,6 +4047,12 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 **Head vs tail sampling?** Head sampling decides at the start, cheaply, before anything has happened, so it drops rare errors as often as boring successes. Tail sampling decides when the trace is complete, so you can keep every error and slow request plus a small share of the rest. The cost: every span of a trace must reach the same collector, so with several collectors you route by trace ID. QuickServe's Envoy samples 100% and Jaeger tail-samples.
 
 **How do you find an N+1 query?** Count queries per request and the most repeated statement (same text with placeholders). QuickServe flags a request when one statement runs 10 or more times: a warning log, a metric by route, and an attribute that makes the tail sampler keep the trace.
+
+**Continuous delivery vs continuous deployment?** Delivery: every change *can* go to production at any time, and a person decides when. Deployment: every change that passes the pipeline *does* go, automatically. QuickServe deploys every merge, which is safe only because of the gates in front (tests, Kubernetes run, Terraform tests) and behind (blue/green swap only once the new version is ready, a smoke test of the live URL, automatic rollback).
+
+**How does CI deploy to AWS without storing AWS keys?** OIDC. GitHub signs a short-lived token naming the repository and environment, and AWS exchanges it for credentials that expire within the hour, but only if the claims match the role's trust policy exactly (`sub = repo:owner@id/name@id:environment:production`, since GitHub's July 2026 format). The role can run one SSM document whose only parameter must match `^(sha-[0-9a-f]{7,40}|rollback)$`.
+
+**How do you change a database schema without downtime?** Expand, then contract. Add the new column or table in a way the old code ignores, deploy the code that uses it, and drop the old one in a later deploy. Then old and new code can run side by side during a blue/green swap, and a rollback needs no schema downgrade (a downgrade could destroy data written since the deploy).
 
 **How do you notify another service reliably when data changes?** The transactional outbox. Write the event to an `outbox_events` table in the same transaction as the change, so both commit or neither does. A separate relay delivers it later. Delivery is at-least-once, so the consumer must be idempotent: QuickServe uses a unique `(event_id, user_id)` constraint with `ON CONFLICT DO NOTHING`. Keep per-entity order by claiming only the oldest waiting event per order. Failures are retried with backoff and dead-lettered after 5 attempts.
 
@@ -4066,3 +4294,22 @@ Business and tax figures change often; the dates show when each was reported.
 134. Grafana Labs, *Grafana Cloud pricing*: Traces (per GB processed, written and retained; free 50 GB a month). https://grafana.com/pricing/
 135. Jaeger maintainers, *Jaeger v2 released: OpenTelemetry in the core!*, CNCF blog (12 November 2024). https://www.cncf.io/blog/2024/11/12/jaeger-v2-released-opentelemetry-in-the-core/
 136. Jaeger, *Download* (Jaeger v1 reached end of life on 31 December 2025). https://www.jaegertracing.io/download/
+137. Martin Fowler, *ContinuousDelivery* (bliki, 30 May 2013): continuous delivery vs continuous deployment. https://martinfowler.com/bliki/ContinuousDelivery.html
+138. Jez Humble, *Continuous Delivery vs Continuous Deployment* (13 August 2010). https://continuousdelivery.com/2010/08/continuous-delivery-vs-continuous-deployment
+139. IBM, *What are DORA metrics?* (deployment frequency, lead time for changes, change failure rate, failed deployment recovery time). https://www.ibm.com/think/topics/dora-metrics
+140. AWS, *Security best practices in IAM*: require workloads to use temporary credentials with IAM roles. https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html
+141. AWS Well-Architected Framework, *SEC02-BP02 Use temporary credentials*. https://docs.aws.amazon.com/wellarchitected/latest/framework/sec02-bp02.html
+142. GitHub Docs, *Configuring OpenID Connect in Amazon Web Services*. https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws
+143. GitHub Docs, *OpenID Connect reference* (subject claims, including the immutable format for repositories created after 15 July 2026). https://docs.github.com/en/actions/reference/security/oidc
+144. AWS Systems Manager User Guide, *Data elements and parameters* (`allowedPattern`, validated by the API and again by SSM Agent). https://docs.aws.amazon.com/systems-manager/latest/userguide/documents-syntax-data-elements-parameters.html
+145. Martin Fowler, *BlueGreenDeployment* (bliki, 1 March 2010). https://martinfowler.com/bliki/BlueGreenDeployment.html
+146. Caddy documentation, *reverse_proxy* (load balancing, `lb_try_duration`, active health checks, which requests are retried). https://caddyserver.com/docs/caddyfile/directives/reverse_proxy
+147. Danilo Sato, *ParallelChange* (martinfowler.com bliki, 13 May 2014): expand, migrate, contract. https://martinfowler.com/bliki/ParallelChange.html
+148. Caddy documentation, *Automatic HTTPS*. https://caddyserver.com/docs/automatic-https
+149. Let's Encrypt, *Challenge Types* (HTTP-01 only on port 80). https://letsencrypt.org/docs/challenge-types/
+150. Let's Encrypt, *Rate Limits* (registered domains from the Public Suffix List; duplicate certificates refill one every 34 hours). https://letsencrypt.org/docs/rate-limits/
+151. Let's Encrypt Community Support, *What do I need for a certificate for SABnzbd on Raspberry* (dynamic DNS providers on the Public Suffix List, duckdns.org among them). https://community.letsencrypt.org/t/what-do-i-need-for-a-certificate-for-sabnzbd-on-raspberry/6121/4
+152. AWS, *Amazon EKS pricing* (USD 0.10 per cluster per hour, standard support). https://aws.amazon.com/eks/pricing/
+153. Jeff Barr, *New – AWS Public IPv4 Address Charge + Public IP Insights*, AWS News Blog (USD 0.005 per IP per hour from 1 February 2024). https://aws.amazon.com/blogs/aws/new-aws-public-ipv4-address-charge-public-ip-insights/
+154. AWS, *Run commands when you launch an EC2 instance with user data input* (16 KB limit). https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/user-data.html
+155. cloud-init documentation, *User-Data Formats* (gzip-compressed content). https://docs.cloud-init.io/en/19.4/topics/format.html
