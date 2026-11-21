@@ -7,11 +7,13 @@ on:
     branches: [main]
   pull_request:
 
-# FinOps for CI: if you push twice quickly, cancel the older run instead of
-# paying (in minutes) for both.
+# FinOps for CI: if you push twice quickly to a branch, cancel the older run
+# instead of paying (in minutes) for both. Never on main (Phase 16): a run on
+# main may be in the middle of deploying, and a deploy cut off halfway could
+# skip its smoke test and its rollback.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
@@ -274,6 +276,8 @@ jobs:
           platforms: ${{ env.PUBLISH == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Phase 16: /health reports the commit, so the deploy can prove the new version is live.
+          build-args: GIT_SHA=${{ github.sha }}
           # Reuse layers from earlier runs: faster builds, fewer CI minutes.
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
@@ -287,6 +291,80 @@ jobs:
             echo "${{ steps.meta.outputs.tags }}"
             echo '```'
             echo "Pull it: \`docker pull ${IMAGE}:sha-${GITHUB_SHA::7}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Phase 16: continuous DEPLOYMENT. Every merge to main that passes every
+  # check above goes live by itself, then gets smoke-tested on the real site.
+  # If the smoke test fails, the server rolls back to the previous version.
+  #
+  # Skipped (not failed) until you set the repository variables that
+  # `terraform output github_setup_commands` prints, and skipped again once you
+  # delete them after `terraform destroy`. Pull requests never deploy.
+  deploy:
+    needs: [publish, kubernetes, terraform]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # The AWS role trusts ONLY jobs in this environment (repo:...:environment:production).
+    # GitHub also records every deploy on the repository's Environments page.
+    environment:
+      name: production
+      url: ${{ vars.LIVE_URL }}
+
+    # One deploy at a time, and never cancel one halfway: queue the next instead.
+    concurrency:
+      group: production
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      id-token: write   # lets the job ask GitHub for an OIDC token to show AWS
+
+    env:
+      LIVE_URL: ${{ vars.LIVE_URL }}
+      DEPLOY_TARGET_PARAMETER: ${{ vars.DEPLOY_TARGET_PARAMETER }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No AWS keys stored anywhere: GitHub signs a token saying "this is
+      # revant123/QuickServe, environment production", and AWS swaps it for
+      # credentials that expire within the hour.
+      - name: Get short-lived AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: deploy-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy this commit (blue/green on the server)
+        id: deploy
+        run: scripts/live_deploy.sh "sha-${GITHUB_SHA::7}"
+
+      - name: Smoke test the live site
+        id: smoke
+        run: |
+          python3 scripts/live_check.py --url "$LIVE_URL" --expect-commit "$GITHUB_SHA" | tee live-check.md
+          exit "${PIPESTATUS[0]}"
+
+      - name: Roll back if the live site is broken
+        # Only when the new version went live and THEN failed the smoke test.
+        # If the deploy itself failed, the old version never stopped serving.
+        if: failure() && steps.deploy.outcome == 'success'
+        run: |
+          echo "::error::The smoke test failed on the live site: rolling back."
+          scripts/live_deploy.sh rollback
+          python3 scripts/live_check.py --url "$LIVE_URL" --timeout 60
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Live deploy: sha-${GITHUB_SHA::7} -> $LIVE_URL"
+            echo "Deploy: ${{ steps.deploy.outcome }}, smoke test: ${{ steps.smoke.outcome }}"
+            echo
+            cat live-check.md 2>/dev/null || true
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Phase 6: check the Terraform code. No AWS account or credentials needed:

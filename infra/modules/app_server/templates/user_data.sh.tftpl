@@ -1,73 +1,248 @@
 #!/bin/bash
 # Runs once, as root, the first time the server boots.
-# Terraform filled in the image name, region and secret path before boot.
+# Terraform filled in the image names, region, domain and secret path before boot.
 # (In the template, bash's own variables are written with two dollar signs so
 # Terraform leaves them alone.)
+#
+# What runs on the server (Phase 16), all in Docker on one private network:
+#
+#   internet --443/80--> caddy --> quickserve-api-blue or -green  (one at a time, except mid-deploy)
+#                              \-> quickserve-web                 (the React app)
+#   quickserve-worker, quickserve-notifier, quickserve-redis, quickserve-jaeger (UI on 127.0.0.1 only)
 set -euo pipefail
 exec > >(tee -a /var/log/quickserve-bootstrap.log) 2>&1
 
 dnf install -y docker
 systemctl enable --now docker
 
-mkdir -p /opt/quickserve
+# FinOps: 1 GiB of swap on the disk we already pay for. A deploy briefly runs
+# two API containers; swap absorbs that spike instead of a bigger instance
+# (t4g.medium costs twice as much for RAM we'd use for 30 seconds).
+if [ ! -f /swapfile ]; then
+  fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  echo '/swapfile none swap defaults 0 0' >> /etc/fstab
+  sysctl -w vm.swappiness=10 && echo 'vm.swappiness=10' > /etc/sysctl.d/90-quickserve.conf
+fi
 
-# deploy.sh does every deploy, the first one below and all later ones:
-#   sudo /opt/quickserve/deploy.sh sha-<commit>
-cat > /opt/quickserve/deploy.sh <<'DEPLOY'
-#!/bin/bash
-set -euo pipefail
+mkdir -p /opt/quickserve/state
 
-TAG="$${1:?usage: deploy.sh <image-tag>, e.g. deploy.sh sha-3073e30}"
-IMAGE="${image}:$TAG"
+cat > /opt/quickserve/Caddyfile <<'CADDYFILE'
+${caddyfile}
+CADDYFILE
+
+cat > /opt/quickserve/jaeger.yaml <<'JAEGER'
+${jaeger_config}
+JAEGER
+
+# ---------- Shared settings for the scripts below ----------
+cat > /opt/quickserve/common.sh <<'COMMON'
 REGION="${region}"
 PREFIX="${ssm_prefix}"
-ENV_FILE=/opt/quickserve/app.env
+DOMAIN="${domain}"
+API_IMAGE="${image}"
+WEB_IMAGE="${web_image}"
+NETWORK=quickserve
+CADDY_IP=172.30.0.2   # fixed, so the API trusts X-Forwarded-For from Caddy and nobody else
+STATE=/opt/quickserve/state
 
-# Secrets come from Parameter Store at deploy time. They are never in the
-# image, never in Git, and never in this script.
+# Read one secret from Parameter Store. Secrets are never in the image, in Git
+# or in these scripts.
 param() {
   aws ssm get-parameter --region "$REGION" --name "$PREFIX/$1" \
     --with-decryption --query Parameter.Value --output text
 }
+COMMON
+
+# ---------- DNS: point the DuckDNS name at this server, on every boot ----------
+cat > /opt/quickserve/update-dns.sh <<'DNS'
+#!/bin/bash
+set -euo pipefail
+source /opt/quickserve/common.sh
+case "$DOMAIN" in
+  *.duckdns.org) ;;
+  *) echo "no DuckDNS domain: nothing to update"; exit 0 ;;
+esac
+TOKEN="$(param duckdns_token)"
+# An empty ip= means "the address this request comes from", i.e. this server.
+RESULT="$(curl -fsS --retry 5 --retry-delay 3 "https://www.duckdns.org/update?domains=$${DOMAIN%.duckdns.org}&token=$TOKEN&ip=")"
+[ "$RESULT" = "OK" ] || { echo "DuckDNS said: $RESULT (check the domain and the token)"; exit 1; }
+echo "DuckDNS: $DOMAIN now points at this server"
+DNS
+
+# A stopped and started server gets a new public IP, so this runs at every boot.
+cat > /etc/systemd/system/quickserve-dns.service <<'UNIT'
+[Unit]
+Description=Point the QuickServe DuckDNS name at this server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/quickserve/update-dns.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# ---------- deploy.sh: every deploy, the first one below and all later ones ----------
+#   sudo /opt/quickserve/deploy.sh sha-<commit>
+#   sudo /opt/quickserve/deploy.sh rollback      (the tag that ran before the last deploy)
+# GitHub Actions runs it through the "deploy" SSM document after each merge.
+cat > /opt/quickserve/deploy.sh <<'DEPLOY'
+#!/bin/bash
+set -euo pipefail
+source /opt/quickserve/common.sh
+
+# One deploy at a time: a second one waits for the first to finish.
+exec 9>/opt/quickserve/deploy.lock
+flock 9
+
+ROLLBACK=false
+if [ "$${1:-}" = "rollback" ]; then
+  ROLLBACK=true
+  TAG="$(cat "$STATE/previous_tag" 2>/dev/null)" || { echo "nothing to roll back to"; exit 1; }
+else
+  TAG="$${1:?usage: deploy.sh <image-tag> | deploy.sh rollback}"
+fi
+CURRENT_TAG="$(cat "$STATE/current_tag" 2>/dev/null || true)"
+ACTIVE="$(cat "$STATE/active_color" 2>/dev/null || echo green)"
+[ "$ACTIVE" = blue ] && NEXT=green || NEXT=blue
+echo "deploying $TAG as $NEXT (now running: $${CURRENT_TAG:-nothing} as $ACTIVE)"
 
 umask 077   # the env file is readable by root only
+ENV_FILE=/opt/quickserve/app.env
 {
   echo "ENVIRONMENT=${app_environment}"
   echo "DATABASE_URL=$(param database_url)"
   echo "JWT_SECRET_KEY=$(param jwt_secret_key)"
   echo "REDIS_URL=redis://quickserve-redis:6379/0"
   echo "LOG_JSON=true"
+  echo "TRUSTED_PROXY_CIDRS=$CADDY_IP/32"
+  echo "TRACING_ENABLED=true"
+  echo "OTEL_EXPORTER_OTLP_ENDPOINT=http://quickserve-jaeger:4318"
 } > "$ENV_FILE"
+umask 022
 
-docker network inspect quickserve >/dev/null 2>&1 || docker network create quickserve
-docker pull "$IMAGE"
+# Docker hands out addresses from --ip-range (.128 and up) only, so nothing
+# started before Caddy can take Caddy's fixed .2.
+docker network inspect "$NETWORK" >/dev/null 2>&1 ||
+  docker network create --subnet 172.30.0.0/24 --ip-range 172.30.0.128/25 "$NETWORK"
 
-# Redis is started once and kept across deploys. Same limits as Docker Compose.
-if ! docker ps -a --format '{{.Names}}' | grep -qx quickserve-redis; then
-  docker run -d --name quickserve-redis --network quickserve --restart unless-stopped \
-    --memory 128m redis:7-alpine \
-    redis-server --maxmemory 64mb --maxmemory-policy volatile-ttl --save ""
+# Download first: if a pull fails, nothing has changed yet.
+docker pull -q "$API_IMAGE:$TAG"
+docker pull -q "$WEB_IMAGE:$TAG"
+
+running() { docker ps --format '{{.Names}}' | grep -qx "$1"; }
+
+# Started once and kept across deploys.
+if ! running quickserve-redis; then
+  docker rm -f quickserve-redis >/dev/null 2>&1 || true
+  docker run -d --name quickserve-redis --network "$NETWORK" --restart unless-stopped \
+    --memory 96m redis:7-alpine redis-server --maxmemory 48mb --maxmemory-policy volatile-ttl --save ""
+fi
+if ! running quickserve-jaeger; then
+  docker rm -f quickserve-jaeger >/dev/null 2>&1 || true
+  # The UI is bound to 127.0.0.1: not reachable from the internet. Open it
+  # through a Session Manager port forward (see infra/README.md).
+  docker run -d --name quickserve-jaeger --network "$NETWORK" --restart unless-stopped \
+    --memory 256m -e TRACE_SAMPLE_PERCENT="${trace_sample_percent}" -p 127.0.0.1:16686:16686 \
+    -v /opt/quickserve/jaeger.yaml:/etc/jaeger/config.yaml:ro ${jaeger_image} --config /etc/jaeger/config.yaml
 fi
 
-# 1. Migrations, once per deploy, before the new code starts.
-#    If this fails, set -e stops the script and the old version keeps running.
-docker run --rm --network quickserve --env-file "$ENV_FILE" "$IMAGE" alembic upgrade head
+# 1. Migrations, before the new code starts. Old code must keep working with
+#    the new tables for a few seconds ("expand, then contract"; see README).
+#    A rollback skips this: the older code has never heard of the newer
+#    migrations, and the expand/contract rule means it doesn't need to.
+if [ "$ROLLBACK" = false ]; then
+  docker run --rm --network "$NETWORK" --env-file "$ENV_FILE" "$API_IMAGE:$TAG" alembic upgrade head
+fi
 
-# 2. Swap the API, the worker and the notifier to the new image. `docker stop` sends
-#    SIGTERM and waits up to 20 s, so the worker finishes its current pass
-#    (`docker rm -f` would SIGKILL it straight away).
-docker stop -t 20 quickserve-api quickserve-worker quickserve-notifier >/dev/null 2>&1 || true
-docker rm quickserve-api quickserve-worker quickserve-notifier >/dev/null 2>&1 || true
-docker run -d --name quickserve-api --network quickserve --env-file "$ENV_FILE" \
-  --restart unless-stopped --memory 768m -p 80:8000 "$IMAGE"
-docker run -d --name quickserve-worker --network quickserve --env-file "$ENV_FILE" \
-  --restart unless-stopped --memory 256m --no-healthcheck "$IMAGE" python -m app.worker
-docker run -d --name quickserve-notifier --network quickserve --env-file "$ENV_FILE" \
-  --restart unless-stopped --memory 192m --no-healthcheck "$IMAGE" python -m app.notifier
+# 2. Start the new API next to the old one and wait until it's READY.
+#    If it never gets there, remove it: the old one never stopped serving.
+docker rm -f "quickserve-api-$NEXT" >/dev/null 2>&1 || true
+docker run -d --name "quickserve-api-$NEXT" --network "$NETWORK" --env-file "$ENV_FILE" \
+  --restart unless-stopped --memory 640m "$API_IMAGE:$TAG"
+for i in $(seq 1 60); do
+  if docker exec "quickserve-api-$NEXT" python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)" 2>/dev/null; then
+    echo "new API ready after $${i}s"
+    break
+  fi
+  if [ "$i" = 60 ]; then
+    echo "the new API never became ready. Its last log lines:"
+    docker logs --tail 30 "quickserve-api-$NEXT" || true
+    docker rm -f "quickserve-api-$NEXT" >/dev/null
+    echo "deploy FAILED: $${CURRENT_TAG:-nothing} is still running"
+    exit 1
+  fi
+  sleep 1
+done
 
-docker image prune -f >/dev/null   # FinOps: old images fill the disk
-echo "deployed $IMAGE"
+# 3. Caddy (started once). It already lists both colours and checks their
+#    health every 2 s, so it finds the new container by itself.
+if ! running quickserve-caddy; then
+  docker rm -f quickserve-caddy >/dev/null 2>&1 || true
+  docker volume create caddy_data >/dev/null   # certificates survive container restarts
+  docker run -d --name quickserve-caddy --network "$NETWORK" --ip "$CADDY_IP" --restart unless-stopped \
+    --memory 96m -p 80:80 -p 443:443 \
+    -e SITE_ADDRESS="$${DOMAIN:-:80}" \
+    -e API_BLUE=quickserve-api-blue:8000 -e API_GREEN=quickserve-api-green:8000 -e WEB=quickserve-web:8080 \
+    -v /opt/quickserve/Caddyfile:/etc/caddy/Caddyfile:ro -v caddy_data:/data ${caddy_image}
+fi
+sleep 3   # let Caddy's health check see the new API
+
+# 4. Stop the old API. `docker stop` sends SIGTERM and waits up to 20 s, so
+#    requests already in progress finish. New ones go to the new container.
+docker stop -t 20 "quickserve-api-$ACTIVE" >/dev/null 2>&1 || true
+docker rm "quickserve-api-$ACTIVE" >/dev/null 2>&1 || true
+
+# 5. The app, the worker and the notifier. The worker finishes its current
+#    pass before stopping; Caddy holds web requests during the 1-second gap.
+docker stop -t 20 quickserve-web quickserve-worker quickserve-notifier >/dev/null 2>&1 || true
+docker rm quickserve-web quickserve-worker quickserve-notifier >/dev/null 2>&1 || true
+docker run -d --name quickserve-web --network "$NETWORK" --restart unless-stopped \
+  --memory 48m "$WEB_IMAGE:$TAG"
+docker run -d --name quickserve-worker --network "$NETWORK" --env-file "$ENV_FILE" \
+  --restart unless-stopped --memory 192m --no-healthcheck "$API_IMAGE:$TAG" python -m app.worker
+docker run -d --name quickserve-notifier --network "$NETWORK" --env-file "$ENV_FILE" \
+  --restart unless-stopped --memory 160m --no-healthcheck "$API_IMAGE:$TAG" python -m app.notifier
+
+echo "$NEXT" > "$STATE/active_color"
+echo "$TAG" > "$STATE/current_tag"
+if [ "$ROLLBACK" = true ]; then
+  rm -f "$STATE/previous_tag"             # roll back once, not back and forth
+elif [ -n "$CURRENT_TAG" ] && [ "$CURRENT_TAG" != "$TAG" ]; then
+  echo "$CURRENT_TAG" > "$STATE/previous_tag"
+fi
+
+# FinOps: keep the images of this version and the previous one (for a fast
+# rollback); delete the rest before they fill the 16 GB disk.
+KEEP="$TAG $(cat "$STATE/previous_tag" 2>/dev/null || true)"
+for repo in "$API_IMAGE" "$WEB_IMAGE"; do
+  docker images "$repo" --format '{{.Tag}}' | while read -r t; do
+    case " $KEEP " in *" $t "*) ;; *) docker rmi "$repo:$t" >/dev/null 2>&1 || true ;; esac
+  done
+done
+docker image prune -f >/dev/null
+
+echo "deployed $TAG ($NEXT)"
 DEPLOY
-chmod 700 /opt/quickserve/deploy.sh
+
+# ---------- seed.sh: load the demo restaurants, with passwords from Parameter Store ----------
+cat > /opt/quickserve/seed.sh <<'SEED'
+#!/bin/bash
+set -euo pipefail
+source /opt/quickserve/common.sh
+SEED_CUSTOMER_PASSWORD="$(param demo_customer_password)"
+SEED_STAFF_PASSWORD="$(param demo_staff_password)"
+export SEED_CUSTOMER_PASSWORD SEED_STAFF_PASSWORD
+# -e NAME (without =value) passes the value along without putting it on the command line.
+docker exec -e SEED_CUSTOMER_PASSWORD -e SEED_STAFF_PASSWORD \
+  "quickserve-api-$(cat "$STATE/active_color")" python -m scripts.seed
+SEED
+
+chmod 700 /opt/quickserve/*.sh
+systemctl daemon-reload
+systemctl enable quickserve-dns.service
+systemctl start quickserve-dns.service || echo "DNS update failed; the site works by IP until it's fixed"
 
 /opt/quickserve/deploy.sh "${image_tag}"

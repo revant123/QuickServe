@@ -33,6 +33,7 @@ variables {
   image_tag          = "sha-abc1234"
   ssm_prefix         = "/quickserve/test"
   app_environment    = "test"
+  domain             = "quickserve-test.duckdns.org"
 }
 
 run "server_is_hardened" {
@@ -86,15 +87,75 @@ run "boot_script_deploys_the_requested_tag_and_holds_no_secrets" {
   command = plan
 
   assert {
-    condition     = strcontains(aws_instance.app.user_data, "/opt/quickserve/deploy.sh \"sha-abc1234\"")
+    condition     = strcontains(local.user_data, "/opt/quickserve/deploy.sh \"sha-abc1234\"")
     error_message = "The first boot should deploy the requested image tag."
   }
   assert {
-    condition     = strcontains(aws_instance.app.user_data, "--name \"$PREFIX/$1\"") && strcontains(aws_instance.app.user_data, "PREFIX=\"/quickserve/test\"")
+    condition     = strcontains(local.user_data, "--name \"$PREFIX/$1\"") && strcontains(local.user_data, "PREFIX=\"/quickserve/test\"")
     error_message = "Secrets must be fetched from Parameter Store at deploy time."
   }
   assert {
-    condition     = !strcontains(aws_instance.app.user_data, "postgresql+psycopg://")
+    condition     = !strcontains(local.user_data, "postgresql+psycopg://")
     error_message = "No database URL (with its password) may be baked into the boot script."
   }
+}
+
+run "live_site_https_and_blue_green" {
+  command = plan
+
+  assert {
+    condition     = length(base64gzip(local.user_data)) * 3 / 4 < 16384 && aws_instance.app.user_data_base64 == base64gzip(local.user_data)
+    error_message = "EC2 refuses user data over 16 KB: even compressed, the boot script has grown too big."
+  }
+  assert {
+    condition     = strcontains(local.user_data, "SITE_ADDRESS=\"$${DOMAIN:-:80}\"") && strcontains(local.user_data, "DOMAIN=\"quickserve-test.duckdns.org\"")
+    error_message = "Caddy must serve the configured domain (and get its certificate)."
+  }
+  assert {
+    condition     = strcontains(local.user_data, "{$SITE_ADDRESS} {") && strcontains(local.user_data, "sampling_percentage: $${env:TRACE_SAMPLE_PERCENT:-100}")
+    error_message = "The Caddyfile and Jaeger config must reach the server unchanged (their own placeholders untouched by Terraform)."
+  }
+  assert {
+    condition     = strcontains(local.user_data, "-p 80:80 -p 443:443") && !strcontains(local.user_data, "-p 80:8000")
+    error_message = "Only Caddy has public ports; the API is reached through it."
+  }
+  assert {
+    condition     = strcontains(local.user_data, "-p 127.0.0.1:16686:16686")
+    error_message = "Jaeger's UI must stay off the internet (localhost only, reached through Session Manager)."
+  }
+  assert {
+    condition     = strcontains(local.user_data, "TRUSTED_PROXY_CIDRS=$CADDY_IP/32")
+    error_message = "The API may trust X-Forwarded-For from Caddy only, or the login limits could be dodged."
+  }
+}
+
+run "deploy_document_accepts_only_image_tags" {
+  command = plan
+
+  assert {
+    condition     = jsondecode(aws_ssm_document.deploy.content).parameters.tag.allowedPattern == "^(sha-[0-9a-f]{7,40}|rollback)$"
+    error_message = "The tag must be sha-<hex> or rollback, so it can't carry a shell command."
+  }
+  assert {
+    condition     = jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand == ["/opt/quickserve/deploy.sh {{ tag }}"]
+    error_message = "The document runs deploy.sh and nothing else."
+  }
+  assert {
+    condition     = alltrue([for t in ["sha-0519a88", "sha-0519a88f3c2d1e0b9a8f7e6d5c4b3a2f1e0d9c8b", "rollback"] : can(regex(local.deploy_tag_pattern, t))])
+    error_message = "Real tags must pass."
+  }
+  assert {
+    condition     = !anytrue([for t in ["sha-0519a88; rm -rf /", "main", "sha-$(id)", "sha-0519a8", "rollback\nreboot"] : can(regex(local.deploy_tag_pattern, t))])
+    error_message = "Anything else must be refused."
+  }
+}
+
+run "domain_must_be_a_bare_host_name" {
+  command = plan
+
+  variables {
+    domain = "https://quickserve-test.duckdns.org/"
+  }
+
+  expect_failures = [var.domain]
 }

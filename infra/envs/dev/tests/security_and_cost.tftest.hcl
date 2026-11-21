@@ -70,12 +70,51 @@ run "database_is_private_and_encrypted" {
   }
 }
 
-run "app_server_only_opens_http" {
+run "app_server_only_opens_http_and_https" {
   command = apply
 
   assert {
-    condition     = length(aws_vpc_security_group_ingress_rule.app_http) == 1 && alltrue([for r in aws_vpc_security_group_ingress_rule.app_http : r.from_port == 80 && r.to_port == 80])
-    error_message = "The app server should accept port 80 only (no SSH: Session Manager is used instead)."
+    condition     = toset([for r in aws_vpc_security_group_ingress_rule.app_http : r.from_port]) == toset([80, 443]) && alltrue([for r in aws_vpc_security_group_ingress_rule.app_http : r.from_port == r.to_port && r.ip_protocol == "tcp"])
+    error_message = "The app server should accept ports 80 and 443 only (no SSH: Session Manager is used instead)."
+  }
+}
+
+run "live_site_secrets_and_deploys" {
+  command = apply
+
+  variables {
+    domain        = "quickserve-test.duckdns.org"
+    duckdns_token = "1a2b3c4d-1a2b-1a2b-1a2b-1a2b3c4d5e6f"
+  }
+
+  assert {
+    condition     = alltrue([for p in [aws_ssm_parameter.demo_customer_password, aws_ssm_parameter.demo_staff_password, aws_ssm_parameter.duckdns_token[0]] : p.type == "SecureString"])
+    error_message = "Demo passwords and the DuckDNS token are secrets."
+  }
+  assert {
+    condition     = random_password.demo_customer.result != random_password.demo_staff.result && random_password.demo_customer.length >= 12 && random_password.demo_staff.length >= 12
+    error_message = "Separate customer and staff passwords, long enough for scripts/seed.py."
+  }
+  assert {
+    condition     = output.site_url == "https://quickserve-test.duckdns.org"
+    error_message = "With a domain, the site is HTTPS on that domain."
+  }
+  assert {
+    condition     = jsondecode(aws_ssm_parameter.deploy_target.value).document == "quickserve-dev-deploy"
+    error_message = "GitHub Actions finds the server and the deploy document through deploy_target."
+  }
+  assert {
+    condition     = module.github_deploy.subject == "repo:revant123@149621150/QuickServe@1461084605:environment:production"
+    error_message = "Only this repository's production environment may deploy."
+  }
+}
+
+run "no_token_no_token_parameter" {
+  command = apply
+
+  assert {
+    condition     = length(aws_ssm_parameter.duckdns_token) == 0 && startswith(output.site_url, "http://")
+    error_message = "Without a domain: no DuckDNS parameter, plain HTTP."
   }
 }
 
@@ -87,7 +126,7 @@ run "http_can_be_limited_to_one_ip" {
   }
 
   assert {
-    condition     = keys(aws_vpc_security_group_ingress_rule.app_http) == ["203.0.113.7/32"]
+    condition     = toset(keys(aws_vpc_security_group_ingress_rule.app_http)) == toset(["203.0.113.7/32-80", "203.0.113.7/32-443"])
     error_message = "allowed_http_cidrs should replace the open-to-everyone rule."
   }
 }

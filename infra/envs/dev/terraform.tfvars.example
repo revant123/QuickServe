@@ -1,7 +1,15 @@
 # Copy to terraform.tfvars (Git ignores it) and edit.
 
 # An immutable tag from https://github.com/revant123/QuickServe/pkgs/container/quickserve
-image_tag = "sha-3073e30"
+# Use the newest one: the short commit ID of main, with "sha-" in front.
+# After the first boot, GitHub Actions deploys every merge by itself (Phase 16).
+image_tag = "sha-0519a88"
+
+# Phase 16: the site's name and your DuckDNS token (duckdns.org, after signing in).
+# Without them the site is plain HTTP on the server's AWS address.
+# domain        = "quickserve-yourname.duckdns.org"
+# duckdns_token = "1a2b3c4d-1a2b-1a2b-1a2b-1a2b3c4d5e6f"
 
 # Keep the demo to yourself: your public IP (search "what is my ip") with /32.
+# Note: Let's Encrypt then can't reach the server either, so no HTTPS.
 # allowed_http_cidrs = ["203.0.113.7/32"]

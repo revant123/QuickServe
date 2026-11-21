@@ -2,14 +2,22 @@
 
 Run:  python -m scripts.seed
 Safe to run twice: it skips the demo data if it already exists.
+
+On a real server (Phase 16) the demo passwords below would be public: they are
+in this file and in the README. So outside local/test/ci the script takes them
+from SEED_CUSTOMER_PASSWORD and SEED_STAFF_PASSWORD instead, and refuses to run
+without them. The live server's seed.sh reads both from Parameter Store.
 """
 
+import os
+import secrets
 from decimal import Decimal
 from itertools import cycle
 
 from sqlalchemy import select
 
 import app.database.models  # noqa: F401
+from app.core.config import get_settings
 from app.core.security import hash_password
 from app.database.session import SessionLocal
 from app.modules.coupons.model import Coupon, CouponFunder
@@ -36,6 +44,39 @@ DEMO_USERS = {
     "rider@quickserve.dev": ("Demo Rider", Role.RIDER, "rider-pass-123"),
     "admin@quickserve.dev": ("Demo Admin", Role.ADMIN, "admin-pass-123"),
 }
+
+# Where the passwords above are fine: your own machine and the test runs.
+PUBLIC_PASSWORD_ENVIRONMENTS = ("local", "test", "ci")
+MIN_LIVE_PASSWORD_LENGTH = 12
+
+
+def demo_passwords(environment: str | None = None, env: dict[str, str] | None = None) -> dict[str, str]:
+    """Email -> password for the demo accounts.
+
+    Locally: the public ones above. Anywhere else: one password for the demo
+    customer (fine to share with someone trying the app) and another for the
+    owner, rider and admin (keep that one to yourself)."""
+    environment = environment or get_settings().environment
+    env = os.environ if env is None else env
+    if environment in PUBLIC_PASSWORD_ENVIRONMENTS:
+        return {email: password for email, (_n, _r, password) in DEMO_USERS.items()}
+    customer, staff = env.get("SEED_CUSTOMER_PASSWORD", ""), env.get("SEED_STAFF_PASSWORD", "")
+    if len(customer) < MIN_LIVE_PASSWORD_LENGTH or len(staff) < MIN_LIVE_PASSWORD_LENGTH:
+        raise SystemExit(
+            f"ENVIRONMENT={environment}: the demo passwords in scripts/seed.py are public. Set "
+            f"SEED_CUSTOMER_PASSWORD and SEED_STAFF_PASSWORD (at least {MIN_LIVE_PASSWORD_LENGTH} characters each). "
+            "On the AWS server, run /opt/quickserve/seed.sh, which reads them from Parameter Store."
+        )
+    return {email: customer if role is Role.CUSTOMER else staff for email, (_n, role, _p) in DEMO_USERS.items()}
+
+
+def reviewer_password(i: int) -> str:
+    """Nobody logs in as a reviewer. Locally the password is predictable for
+    poking around; anywhere else it's random and thrown away."""
+    if get_settings().environment in PUBLIC_PASSWORD_ENVIRONMENTS:
+        return f"reviewer-pass-{i}"
+    return secrets.token_urlsafe(24)
+
 
 # Where the demo restaurants are (Phase 11): delivery fees depend on distance.
 LOCATIONS = {
@@ -162,7 +203,7 @@ def reviewers(db) -> list[User]:
         email = f"reviewer{i}@quickserve.dev"
         user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
         if user is None:
-            user = User(name=name, email=email, role=Role.CUSTOMER, password_hash=hash_password(f"reviewer-pass-{i}"))
+            user = User(name=name, email=email, role=Role.CUSTOMER, password_hash=hash_password(reviewer_password(i)))
             db.add(user)
             db.commit()
         found.append(user)
@@ -259,7 +300,10 @@ def print_discovery_examples() -> None:
 
 def print_logins() -> None:
     print("\nDemo logins. In Swagger click 'Authorize' and put the email in the 'username' box:")
+    public = get_settings().environment in PUBLIC_PASSWORD_ENVIRONMENTS
     for email, (_name, role, password) in DEMO_USERS.items():
+        if not public:  # never print real passwords into a server's logs
+            password = "$SEED_CUSTOMER_PASSWORD" if role is Role.CUSTOMER else "$SEED_STAFF_PASSWORD"
         print(f"  {role.value:<17} {email:<26} {password}")
 
 
@@ -278,13 +322,14 @@ def add_phase11_data(db) -> None:
 
 
 def main() -> None:
+    passwords = demo_passwords()  # first, so a live server without passwords stops before writing anything
     with SessionLocal() as db:
         if db.execute(select(User).where(User.email == "owner@quickserve.dev")).scalar_one_or_none():
             # Data from an older seed: add any demo accounts that didn't exist back then
             # (the rider and admin arrived with Phase 3).
-            for email, (name, role, password) in DEMO_USERS.items():
+            for email, (name, role, _public) in DEMO_USERS.items():
                 if db.execute(select(User).where(User.email == email)).scalar_one_or_none() is None:
-                    db.add(User(name=name, email=email, role=role, password_hash=hash_password(password)))
+                    db.add(User(name=name, email=email, role=role, password_hash=hash_password(passwords[email])))
                     print(f"Added missing demo account: {email}")
             db.commit()
             add_phase11_data(db)
@@ -296,8 +341,8 @@ def main() -> None:
 
         users: dict[Role, User] = {}
         # Rider and admin can't sign up through the API, so the script creates them directly.
-        for email, (name, role, password) in DEMO_USERS.items():
-            users[role] = User(name=name, email=email, role=role, password_hash=hash_password(password))
+        for email, (name, role, _public) in DEMO_USERS.items():
+            users[role] = User(name=name, email=email, role=role, password_hash=hash_password(passwords[email]))
             db.add(users[role])
         db.commit()
         owner = users[Role.RESTAURANT_OWNER]

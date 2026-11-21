@@ -19,7 +19,7 @@ from app.core.redis import redis_is_up
 from app.core.tracing import configure_tracing, current_trace_id, install_query_audit, query_audit, report_queries
 from app.database.session import engine
 
-VERSION = "0.5.0"
+VERSION = "1.0.0"  # Phase 16: live on the internet
 settings = get_settings()
 configure_logging()
 log = logging.getLogger("quickserve.http")
@@ -115,8 +115,11 @@ def home():
 def liveness():
     """Liveness: is the process up? Kubernetes restarts the container if this fails.
     Deliberately does NOT touch the database: a DB outage should not make
-    Kubernetes kill every healthy app container in a restart loop."""
-    return {"status": "alive"}
+    Kubernetes kill every healthy app container in a restart loop.
+
+    It also says which build is running: after a deploy, the live smoke test
+    checks `commit` to prove the NEW version answers, not the old one."""
+    return {"status": "alive", "version": VERSION, "commit": get_settings().git_sha}
 
 
 @app.get("/health/ready", tags=["health"])
