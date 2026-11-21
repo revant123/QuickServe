@@ -33,6 +33,16 @@ def messages_for(event_type: str, p: dict) -> list[Message]:
         return [
             Message(customer, "order.placed", "Order placed", f"Pay {total} to confirm your order from {place}."),
         ]
+    if event_type == "order.rider_assigned":  # Phase 14
+        rider = p["rider_name"].split()[0]
+        return [
+            Message(
+                customer,
+                "order.rider_assigned",
+                f"{rider} will deliver your order",
+                f"{rider} is heading to {place}. Your delivery code is on the order screen.",
+            )
+        ]
     if event_type != "order.status_changed":
         raise UnknownEvent(f"don't know how to notify about '{event_type}'")
 
@@ -54,7 +64,7 @@ def messages_for(event_type: str, p: dict) -> list[Message]:
         "OUT_FOR_DELIVERY": (
             "order.out_for_delivery",
             "On the way!",
-            "Your delivery partner has picked up your order.",
+            "Your delivery partner has picked up your order. Share your delivery code only at the door.",
         ),
         "DELIVERED": ("order.delivered", "Delivered. Enjoy your meal!", f"Rate your order from {place}."),
         "PAYMENT_FAILED": (

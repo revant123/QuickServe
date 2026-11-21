@@ -21,7 +21,7 @@ from app.modules.reviews.schema import ReviewCreate
 from app.modules.reviews.service import create_review, recompute_ratings, restaurant_reviews
 from app.modules.users.model import Role
 from tests.conftest import TEST_PASSWORD
-from tests.helpers import order_payload
+from tests.helpers import order_payload, rider_steps
 
 
 @pytest.fixture
@@ -36,13 +36,13 @@ def deliver(db, restaurant, make_item, owner, rider):
             (S.ACCEPTED, owner),
             (S.PREPARING, owner),
             (S.READY, owner),
-            (S.OUT_FOR_DELIVERY, rider),
-            (S.DELIVERED, rider),
         ]
         for status, actor in steps:
             change_status(db, order.id, status, actor)
             if status is until:
                 break
+        else:
+            rider_steps(db, order.id, rider, until)
         db.refresh(order)
         return order
 

@@ -617,6 +617,116 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "KitchenItem": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "quantity"
+        ],
+        "title": "KitchenItem",
+        "type": "object"
+      },
+      "KitchenOrder": {
+        "description": "One ticket on the restaurant's order board (a KOT, kitchen order ticket).",
+        "properties": {
+          "accept_by": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept By"
+          },
+          "cancel_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Reason"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "customer_first_name": {
+            "title": "Customer First Name",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "item_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Item Total",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/KitchenItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "packaging_charge": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Packaging Charge",
+            "type": "string"
+          },
+          "rider_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rider Name"
+          },
+          "short_id": {
+            "title": "Short Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          }
+        },
+        "required": [
+          "id",
+          "short_id",
+          "status",
+          "created_at",
+          "accept_by",
+          "items",
+          "item_total",
+          "packaging_charge",
+          "customer_first_name",
+          "rider_name",
+          "cancel_reason"
+        ],
+        "title": "KitchenOrder",
+        "type": "object"
+      },
       "LocationUpdate": {
         "description": "For restaurants created before Phase 11, which have no location yet.",
         "properties": {
@@ -994,6 +1104,19 @@
         "title": "NotificationOut",
         "type": "object"
       },
+      "OpenUpdate": {
+        "properties": {
+          "is_open": {
+            "title": "Is Open",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "is_open"
+        ],
+        "title": "OpenUpdate",
+        "type": "object"
+      },
       "OrderCreate": {
         "properties": {
           "coupon_code": {
@@ -1169,6 +1292,17 @@
             "title": "Delivery Address",
             "type": "string"
           },
+          "delivery_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Code"
+          },
           "delivery_fee": {
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Delivery Fee",
@@ -1254,6 +1388,17 @@
             "format": "uuid",
             "title": "Restaurant Id",
             "type": "string"
+          },
+          "rider_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rider Name"
           },
           "small_order_fee": {
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
@@ -1438,6 +1583,65 @@
         ],
         "title": "PaymentStatus",
         "type": "string"
+      },
+      "PoolOrder": {
+        "description": "An order waiting for a rider. No customer address until it's claimed.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "distance_km": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance Km"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "item_count": {
+            "title": "Item Count",
+            "type": "integer"
+          },
+          "restaurant_address": {
+            "title": "Restaurant Address",
+            "type": "string"
+          },
+          "restaurant_name": {
+            "title": "Restaurant Name",
+            "type": "string"
+          },
+          "rider_pay": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Rider Pay",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "restaurant_name",
+          "restaurant_address",
+          "distance_km",
+          "item_count",
+          "rider_pay",
+          "created_at"
+        ],
+        "title": "PoolOrder",
+        "type": "object"
       },
       "PricingInfo": {
         "description": "What the app shows on a \"why am I paying this?\" screen.",
@@ -2226,6 +2430,180 @@
         "title": "ReviewOut",
         "type": "object"
       },
+      "RiderDay": {
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiderOrder"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "delivered_today": {
+            "items": {
+              "$ref": "#/components/schemas/RiderOrder"
+            },
+            "title": "Delivered Today",
+            "type": "array"
+          },
+          "deliveries_today": {
+            "title": "Deliveries Today",
+            "type": "integer"
+          },
+          "earnings_today": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Earnings Today",
+            "type": "string"
+          }
+        },
+        "required": [
+          "active",
+          "delivered_today",
+          "deliveries_today",
+          "earnings_today"
+        ],
+        "title": "RiderDay",
+        "type": "object"
+      },
+      "RiderOrder": {
+        "description": "A claimed order, as its rider sees it: both addresses, no prices except their pay.",
+        "properties": {
+          "assigned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "delivery_address": {
+            "title": "Delivery Address",
+            "type": "string"
+          },
+          "delivery_latitude": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Latitude"
+          },
+          "delivery_longitude": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Longitude"
+          },
+          "distance_km": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance Km"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "item_count": {
+            "title": "Item Count",
+            "type": "integer"
+          },
+          "restaurant_address": {
+            "title": "Restaurant Address",
+            "type": "string"
+          },
+          "restaurant_latitude": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restaurant Latitude"
+          },
+          "restaurant_longitude": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restaurant Longitude"
+          },
+          "restaurant_name": {
+            "title": "Restaurant Name",
+            "type": "string"
+          },
+          "rider_pay": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rider Pay"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "restaurant_name",
+          "restaurant_address",
+          "restaurant_latitude",
+          "restaurant_longitude",
+          "delivery_address",
+          "delivery_latitude",
+          "delivery_longitude",
+          "distance_km",
+          "item_count",
+          "rider_pay",
+          "assigned_at",
+          "created_at"
+        ],
+        "title": "RiderOrder",
+        "type": "object"
+      },
       "Role": {
         "enum": [
           "CUSTOMER",
@@ -2235,6 +2613,101 @@
         ],
         "title": "Role",
         "type": "string"
+      },
+      "SalesReport": {
+        "properties": {
+          "avg_prep_minutes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Prep Minutes"
+          },
+          "commission": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Commission",
+            "type": "string"
+          },
+          "commission_percent": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Commission Percent",
+            "type": "string"
+          },
+          "day": {
+            "format": "date",
+            "title": "Day",
+            "type": "string"
+          },
+          "estimated_payout": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Estimated Payout",
+            "type": "string"
+          },
+          "food_sales": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Food Sales",
+            "type": "string"
+          },
+          "gst_on_commission": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Gst On Commission",
+            "type": "string"
+          },
+          "orders_cancelled": {
+            "title": "Orders Cancelled",
+            "type": "integer"
+          },
+          "orders_delivered": {
+            "title": "Orders Delivered",
+            "type": "integer"
+          },
+          "orders_in_progress": {
+            "title": "Orders In Progress",
+            "type": "integer"
+          },
+          "orders_missed": {
+            "title": "Orders Missed",
+            "type": "integer"
+          },
+          "restaurant_discounts": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Restaurant Discounts",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "top_items": {
+            "items": {
+              "$ref": "#/components/schemas/TopItem"
+            },
+            "title": "Top Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "day",
+          "timezone",
+          "orders_delivered",
+          "orders_in_progress",
+          "orders_cancelled",
+          "orders_missed",
+          "food_sales",
+          "restaurant_discounts",
+          "commission_percent",
+          "commission",
+          "gst_on_commission",
+          "estimated_payout",
+          "avg_prep_minutes",
+          "top_items"
+        ],
+        "title": "SalesReport",
+        "type": "object"
       },
       "SearchResult": {
         "properties": {
@@ -2340,6 +2813,18 @@
       },
       "StatusUpdate": {
         "properties": {
+          "delivery_code": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{4}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Code"
+          },
           "note": {
             "anyOf": [
               {
@@ -2401,6 +2886,24 @@
           "expires_in_minutes"
         ],
         "title": "TokenOut",
+        "type": "object"
+      },
+      "TopItem": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "quantity"
+        ],
+        "title": "TopItem",
         "type": "object"
       },
       "UserCreate": {
@@ -3329,7 +3832,7 @@
     },
     "/api/v1/orders/{order_id}": {
       "get": {
-        "description": "Visible to: the customer who placed it, the restaurant's owner, riders once it's READY, admins.",
+        "description": "Visible to: the customer who placed it, the restaurant's owner, the rider who claimed it, admins.",
         "operationId": "get_order_api_v1_orders__order_id__get",
         "parameters": [
           {
@@ -3432,6 +3935,56 @@
         "summary": "Cancel Order",
         "tags": [
           "orders"
+        ]
+      }
+    },
+    "/api/v1/orders/{order_id}/claim": {
+      "post": {
+        "description": "Riders. Take an order from the pool. 409 if someone else got it first, or if you\nalready have a delivery in progress.",
+        "operationId": "claim_order_api_v1_orders__order_id__claim_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiderOrder"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Claim Order",
+        "tags": [
+          "orders",
+          "riders"
         ]
       }
     },
@@ -3554,6 +4107,56 @@
         ]
       }
     },
+    "/api/v1/orders/{order_id}/release": {
+      "post": {
+        "description": "Riders. Give your order back to the pool, before you've picked it up.",
+        "operationId": "release_order_api_v1_orders__order_id__release_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiderOrder"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Release Order",
+        "tags": [
+          "orders",
+          "riders"
+        ]
+      }
+    },
     "/api/v1/orders/{order_id}/review": {
       "post": {
         "description": "The customer who placed a DELIVERED order, once, within a few days of delivery.",
@@ -3615,7 +4218,7 @@
     },
     "/api/v1/orders/{order_id}/status": {
       "patch": {
-        "description": "Restaurant owner: ACCEPTED, REJECTED, PREPARING, READY. Rider: OUT_FOR_DELIVERY, DELIVERED. Admin: CANCELLED.",
+        "description": "Restaurant owner: ACCEPTED, REJECTED, PREPARING, READY. Its rider: OUT_FOR_DELIVERY, then DELIVERED\nwith the customer's `delivery_code` (422 if wrong, locked after 5 wrong tries). Admin: CANCELLED.",
         "operationId": "update_status_api_v1_orders__order_id__status_patch",
         "parameters": [
           {
@@ -3897,6 +4500,38 @@
         "summary": "Create Restaurant",
         "tags": [
           "restaurants"
+        ]
+      }
+    },
+    "/api/v1/restaurants/mine": {
+      "get": {
+        "description": "Restaurant owners: the restaurants you own (Phase 14).",
+        "operationId": "my_restaurants_api_v1_restaurants_mine_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RestaurantOut"
+                  },
+                  "title": "Response My Restaurants Api V1 Restaurants Mine Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "My Restaurants",
+        "tags": [
+          "restaurants",
+          "partners"
         ]
       }
     },
@@ -4365,6 +5000,146 @@
         ]
       }
     },
+    "/api/v1/restaurants/{restaurant_id}/open": {
+      "put": {
+        "description": "The restaurant's owner (or an admin). Start or stop accepting new orders (Phase 14).",
+        "operationId": "set_open_api_v1_restaurants__restaurant_id__open_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Restaurant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestaurantOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Set Open",
+        "tags": [
+          "restaurants",
+          "partners"
+        ]
+      }
+    },
+    "/api/v1/restaurants/{restaurant_id}/orders": {
+      "get": {
+        "description": "The restaurant's owner. `active`: paid orders the kitchen still has to act on, oldest first.\n`recent`: finished, cancelled and picked-up orders, newest first.",
+        "operationId": "order_board_api_v1_restaurants__restaurant_id__orders_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Restaurant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "active",
+              "enum": [
+                "active",
+                "recent"
+              ],
+              "title": "View",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/KitchenOrder"
+                  },
+                  "title": "Response Order Board Api V1 Restaurants  Restaurant Id  Orders Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Order Board",
+        "tags": [
+          "orders",
+          "partners"
+        ]
+      }
+    },
     "/api/v1/restaurants/{restaurant_id}/profile": {
       "put": {
         "description": "The restaurant's owner (or an admin). Cuisines and usual preparation time (Phase 12).",
@@ -4488,6 +5263,133 @@
         "summary": "List Reviews",
         "tags": [
           "reviews"
+        ]
+      }
+    },
+    "/api/v1/restaurants/{restaurant_id}/sales": {
+      "get": {
+        "description": "The restaurant's owner. One day's orders, sales, commission and estimated payout\n(default: today in the restaurant's time zone).",
+        "operationId": "sales_report_api_v1_restaurants__restaurant_id__sales_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Restaurant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "day",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Day"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Sales Report",
+        "tags": [
+          "orders",
+          "partners"
+        ]
+      }
+    },
+    "/api/v1/rider/me": {
+      "get": {
+        "description": "Riders. Your delivery in progress, and today's deliveries and earnings.",
+        "operationId": "rider_day_api_v1_rider_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiderDay"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Rider Day",
+        "tags": [
+          "orders",
+          "riders"
+        ]
+      }
+    },
+    "/api/v1/rider/pool": {
+      "get": {
+        "description": "Riders. Accepted orders nobody has claimed yet, food closest to ready first.",
+        "operationId": "rider_pool_api_v1_rider_pool_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PoolOrder"
+                  },
+                  "title": "Response Rider Pool Api V1 Rider Pool Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Rider Pool",
+        "tags": [
+          "orders",
+          "riders"
         ]
       }
     },

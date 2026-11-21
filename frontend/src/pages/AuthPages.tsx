@@ -5,6 +5,14 @@ import { TopBar } from '../components/ui'
 import { safeNext } from '../lib/safeNext'
 
 
+// The seed's local-only demo logins. The same three apps a real platform has:
+// customers, restaurant partners and delivery partners.
+const DEMO = [
+  { label: 'customer', email: 'customer@quickserve.dev', password: 'customer-pass-123' },
+  { label: 'restaurant owner', email: 'owner@quickserve.dev', password: 'owner-pass-123' },
+  { label: 'rider', email: 'rider@quickserve.dev', password: 'rider-pass-123' },
+]
+
 export function LoginPage() {
   const { login, loggedIn } = useAuth()
   const [params] = useSearchParams()
@@ -48,16 +56,22 @@ export function LoginPage() {
           <button type="submit" className="btn" disabled={busy || !email || !password}>
             {busy ? 'Logging in…' : 'Log in'}
           </button>
-          <button
-            type="button"
-            className="btn ghost"
-            onClick={() => {
-              setEmail('customer@quickserve.dev')
-              setPassword('customer-pass-123')
-            }}
-          >
-            Fill in the demo customer (from the seed)
-          </button>
+          <fieldset className="demo-logins">
+            <legend className="small muted">Demo accounts (from the seed)</legend>
+            {DEMO.map((d) => (
+              <button
+                key={d.email}
+                type="button"
+                className="btn ghost"
+                onClick={() => {
+                  setEmail(d.email)
+                  setPassword(d.password)
+                }}
+              >
+                Fill in the demo {d.label}
+              </button>
+            ))}
+          </fieldset>
         </form>
         <p className="center">
           New here? <Link to={`/register?next=${encodeURIComponent(next)}`}>Create an account</Link>

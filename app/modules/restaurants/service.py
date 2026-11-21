@@ -72,3 +72,20 @@ def set_profile(db: Session, restaurant_id: uuid.UUID, data: ProfileUpdate, user
         restaurant.cuisines = ", ".join(data.cuisines)
         restaurant.avg_prep_minutes = data.avg_prep_minutes
     return restaurant
+
+
+def list_mine(db: Session, owner: User) -> list[Restaurant]:
+    """The partner app's restaurant picker (Phase 14). Uses the index on owner_id."""
+    return list(
+        db.execute(select(Restaurant).where(Restaurant.owner_id == owner.id).order_by(Restaurant.name)).scalars()
+    )
+
+
+def set_open(db: Session, restaurant_id: uuid.UUID, is_open: bool, user: User) -> Restaurant:
+    """The partner app's "accepting orders" switch, like going offline on Zomato or Swiggy
+    when the kitchen is overwhelmed. Closed restaurants drop out of "near me" and refuse
+    new orders; orders already placed carry on."""
+    with transaction(db):
+        restaurant = ensure_can_manage(db, restaurant_id, user)
+        restaurant.is_open = is_open
+    return restaurant

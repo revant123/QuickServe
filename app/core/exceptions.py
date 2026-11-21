@@ -80,3 +80,7 @@ class PriceChanged(Conflict):
     def __init__(self, message: str, new_total):
         super().__init__(message)
         self.extra = {"new_grand_total": str(new_total)}
+
+
+class WrongDeliveryCode(Unprocessable):
+    """422: the rider typed a delivery code that doesn't match (Phase 14)."""

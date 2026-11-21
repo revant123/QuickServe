@@ -42,6 +42,10 @@ ACTORS = {
 # Customers can cancel only before the restaurant accepts. After that, only support can.
 CUSTOMER_CANCELLABLE = {S.PLACED, S.PAID}
 
+# The note on an order the timeout job rejected. The sales report counts these
+# as "missed" orders, which real platforms track closely.
+AUTO_REJECT_REASON = "Restaurant did not accept in time"
+
 
 def can_transition(current: S, target: S) -> bool:
     return target in ALLOWED[current]
