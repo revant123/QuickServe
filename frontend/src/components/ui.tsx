@@ -156,18 +156,26 @@ export function CartBar() {
   )
 }
 
-const NAV = [
+export interface NavItem {
+  to: string
+  label: string
+  icon: string // an SVG path, drawn with a 2px stroke
+}
+
+const NAV: NavItem[] = [
   { to: '/', label: 'Home', icon: 'M3 11l9-7 9 7M5 10v10h14V10' },
   { to: '/search', label: 'Search', icon: 'M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14M20 20l-3.5-3.5' },
   { to: '/orders', label: 'Orders', icon: 'M6 3h12l1 18H5zM9 8a3 3 0 0 0 6 0' },
   { to: '/profile', label: 'Profile', icon: 'M12 4a4 4 0 1 0 0 8a4 4 0 1 0 0-8M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6' },
 ]
 
-export function BottomNav() {
+export function BottomNav({ items = NAV, label = 'Main' }: { items?: NavItem[]; label?: string }) {
+  // The first item is the section's home: only an exact match marks it active.
+  const home = items[0]?.to
   return (
-    <nav aria-label="Main" className="bottom-nav">
-      {NAV.map((n) => (
-        <NavLink key={n.to} to={n.to} end={n.to === '/'}>
+    <nav aria-label={label} className="bottom-nav" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}>
+      {items.map((n) => (
+        <NavLink key={n.to} to={n.to} end={n.to === home}>
           <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d={n.icon} />
           </svg>

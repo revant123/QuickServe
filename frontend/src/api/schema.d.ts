@@ -315,7 +315,7 @@ export interface paths {
         };
         /**
          * Get Order
-         * @description Visible to: the customer who placed it, the restaurant's owner, riders once it's READY, admins.
+         * @description Visible to: the customer who placed it, the restaurant's owner, the rider who claimed it, admins.
          */
         get: operations["get_order_api_v1_orders__order_id__get"];
         put?: never;
@@ -346,6 +346,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orders/{order_id}/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim Order
+         * @description Riders. Take an order from the pool. 409 if someone else got it first, or if you
+         *     already have a delivery in progress.
+         */
+        post: operations["claim_order_api_v1_orders__order_id__claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orders/{order_id}/payments": {
         parameters: {
             query?: never;
@@ -361,6 +382,26 @@ export interface paths {
          * @description Pay for your own order. Retrying with the same Idempotency-Key returns the first result.
          */
         post: operations["pay_api_v1_orders__order_id__payments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orders/{order_id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Order
+         * @description Riders. Give your order back to the pool, before you've picked it up.
+         */
+        post: operations["release_order_api_v1_orders__order_id__release_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -402,7 +443,8 @@ export interface paths {
         head?: never;
         /**
          * Update Status
-         * @description Restaurant owner: ACCEPTED, REJECTED, PREPARING, READY. Rider: OUT_FOR_DELIVERY, DELIVERED. Admin: CANCELLED.
+         * @description Restaurant owner: ACCEPTED, REJECTED, PREPARING, READY. Its rider: OUT_FOR_DELIVERY, then DELIVERED
+         *     with the customer's `delivery_code` (422 if wrong, locked after 5 wrong tries). Admin: CANCELLED.
          */
         patch: operations["update_status_api_v1_orders__order_id__status_patch"];
         trace?: never;
@@ -479,6 +521,26 @@ export interface paths {
          * @description Restaurant owners only. You become the owner of the restaurant you create.
          */
         post: operations["create_restaurant_api_v1_restaurants_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/restaurants/mine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * My Restaurants
+         * @description Restaurant owners: the restaurants you own (Phase 14).
+         */
+        get: operations["my_restaurants_api_v1_restaurants_mine_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -605,6 +667,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/restaurants/{restaurant_id}/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Open
+         * @description The restaurant's owner (or an admin). Start or stop accepting new orders (Phase 14).
+         */
+        put: operations["set_open_api_v1_restaurants__restaurant_id__open_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/restaurants/{restaurant_id}/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Order Board
+         * @description The restaurant's owner. `active`: paid orders the kitchen still has to act on, oldest first.
+         *     `recent`: finished, cancelled and picked-up orders, newest first.
+         */
+        get: operations["order_board_api_v1_restaurants__restaurant_id__orders_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/restaurants/{restaurant_id}/profile": {
         parameters: {
             query?: never;
@@ -637,6 +740,67 @@ export interface paths {
          * @description Public. Rating summary with the star distribution, and the newest reviews.
          */
         get: operations["list_reviews_api_v1_restaurants__restaurant_id__reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/restaurants/{restaurant_id}/sales": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Sales Report
+         * @description The restaurant's owner. One day's orders, sales, commission and estimated payout
+         *     (default: today in the restaurant's time zone).
+         */
+        get: operations["sales_report_api_v1_restaurants__restaurant_id__sales_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rider/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Rider Day
+         * @description Riders. Your delivery in progress, and today's deliveries and earnings.
+         */
+        get: operations["rider_day_api_v1_rider_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rider/pool": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Rider Pool
+         * @description Riders. Accepted orders nobody has claimed yet, food closest to ready first.
+         */
+        get: operations["rider_pool_api_v1_rider_pool_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -970,6 +1134,46 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** KitchenItem */
+        KitchenItem: {
+            /** Name */
+            name: string;
+            /** Quantity */
+            quantity: number;
+        };
+        /**
+         * KitchenOrder
+         * @description One ticket on the restaurant's order board (a KOT, kitchen order ticket).
+         */
+        KitchenOrder: {
+            /** Accept By */
+            accept_by: string | null;
+            /** Cancel Reason */
+            cancel_reason: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Customer First Name */
+            customer_first_name: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Item Total */
+            item_total: string;
+            /** Items */
+            items: components["schemas"]["KitchenItem"][];
+            /** Packaging Charge */
+            packaging_charge: string;
+            /** Rider Name */
+            rider_name: string | null;
+            /** Short Id */
+            short_id: string;
+            status: components["schemas"]["OrderStatus"];
+        };
         /**
          * LocationUpdate
          * @description For restaurants created before Phase 11, which have no location yet.
@@ -1112,6 +1316,11 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** OpenUpdate */
+        OpenUpdate: {
+            /** Is Open */
+            is_open: boolean;
+        };
         /** OrderCreate */
         OrderCreate: {
             /** Coupon Code */
@@ -1177,6 +1386,8 @@ export interface components {
             customer_id: string;
             /** Delivery Address */
             delivery_address: string;
+            /** Delivery Code */
+            delivery_code?: string | null;
             /** Delivery Fee */
             delivery_fee: string;
             /** Discount */
@@ -1214,6 +1425,8 @@ export interface components {
              * Format: uuid
              */
             restaurant_id: string;
+            /** Rider Name */
+            rider_name?: string | null;
             /** Small Order Fee */
             small_order_fee: string;
             status: components["schemas"]["OrderStatus"];
@@ -1287,6 +1500,33 @@ export interface components {
          * @enum {string}
          */
         PaymentStatus: "SUCCESS" | "FAILED" | "REFUNDED";
+        /**
+         * PoolOrder
+         * @description An order waiting for a rider. No customer address until it's claimed.
+         */
+        PoolOrder: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Distance Km */
+            distance_km: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Item Count */
+            item_count: number;
+            /** Restaurant Address */
+            restaurant_address: string;
+            /** Restaurant Name */
+            restaurant_name: string;
+            /** Rider Pay */
+            rider_pay: string;
+            status: components["schemas"]["OrderStatus"];
+        };
         /**
          * PricingInfo
          * @description What the app shows on a "why am I paying this?" screen.
@@ -1591,11 +1831,94 @@ export interface components {
             /** Reviewer */
             reviewer: string;
         };
+        /** RiderDay */
+        RiderDay: {
+            active: components["schemas"]["RiderOrder"] | null;
+            /** Delivered Today */
+            delivered_today: components["schemas"]["RiderOrder"][];
+            /** Deliveries Today */
+            deliveries_today: number;
+            /** Earnings Today */
+            earnings_today: string;
+        };
+        /**
+         * RiderOrder
+         * @description A claimed order, as its rider sees it: both addresses, no prices except their pay.
+         */
+        RiderOrder: {
+            /** Assigned At */
+            assigned_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Delivery Address */
+            delivery_address: string;
+            /** Delivery Latitude */
+            delivery_latitude: string | null;
+            /** Delivery Longitude */
+            delivery_longitude: string | null;
+            /** Distance Km */
+            distance_km: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Item Count */
+            item_count: number;
+            /** Restaurant Address */
+            restaurant_address: string;
+            /** Restaurant Latitude */
+            restaurant_latitude: string | null;
+            /** Restaurant Longitude */
+            restaurant_longitude: string | null;
+            /** Restaurant Name */
+            restaurant_name: string;
+            /** Rider Pay */
+            rider_pay: string | null;
+            status: components["schemas"]["OrderStatus"];
+        };
         /**
          * Role
          * @enum {string}
          */
         Role: "CUSTOMER" | "RESTAURANT_OWNER" | "RIDER" | "ADMIN";
+        /** SalesReport */
+        SalesReport: {
+            /** Avg Prep Minutes */
+            avg_prep_minutes: number | null;
+            /** Commission */
+            commission: string;
+            /** Commission Percent */
+            commission_percent: string;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Estimated Payout */
+            estimated_payout: string;
+            /** Food Sales */
+            food_sales: string;
+            /** Gst On Commission */
+            gst_on_commission: string;
+            /** Orders Cancelled */
+            orders_cancelled: number;
+            /** Orders Delivered */
+            orders_delivered: number;
+            /** Orders In Progress */
+            orders_in_progress: number;
+            /** Orders Missed */
+            orders_missed: number;
+            /** Restaurant Discounts */
+            restaurant_discounts: string;
+            /** Timezone */
+            timezone: string;
+            /** Top Items */
+            top_items: components["schemas"]["TopItem"][];
+        };
         /** SearchResult */
         SearchResult: {
             /** Dishes */
@@ -1636,6 +1959,8 @@ export interface components {
         };
         /** StatusUpdate */
         StatusUpdate: {
+            /** Delivery Code */
+            delivery_code?: string | null;
             /** Note */
             note?: string | null;
             status: components["schemas"]["OrderStatus"];
@@ -1658,6 +1983,13 @@ export interface components {
              * @default bearer
              */
             token_type: string;
+        };
+        /** TopItem */
+        TopItem: {
+            /** Name */
+            name: string;
+            /** Quantity */
+            quantity: number;
         };
         /** UserCreate */
         UserCreate: {
@@ -2302,6 +2634,37 @@ export interface operations {
             };
         };
     };
+    claim_order_api_v1_orders__order_id__claim_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiderOrder"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_payments_api_v1_orders__order_id__payments_get: {
         parameters: {
             query?: never;
@@ -2355,6 +2718,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PaymentOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_order_api_v1_orders__order_id__release_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiderOrder"];
                 };
             };
             /** @description Validation Error */
@@ -2581,6 +2975,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_restaurants_api_v1_restaurants_mine_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestaurantOut"][];
                 };
             };
         };
@@ -2819,6 +3233,75 @@ export interface operations {
             };
         };
     };
+    set_open_api_v1_restaurants__restaurant_id__open_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                restaurant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OpenUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestaurantOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    order_board_api_v1_restaurants__restaurant_id__orders_get: {
+        parameters: {
+            query?: {
+                view?: "active" | "recent";
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                restaurant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KitchenOrder"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     set_profile_api_v1_restaurants__restaurant_id__profile_put: {
         parameters: {
             query?: never;
@@ -2884,6 +3367,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sales_report_api_v1_restaurants__restaurant_id__sales_get: {
+        parameters: {
+            query?: {
+                day?: string | null;
+            };
+            header?: never;
+            path: {
+                restaurant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SalesReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rider_day_api_v1_rider_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiderDay"];
+                };
+            };
+        };
+    };
+    rider_pool_api_v1_rider_pool_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolOrder"][];
                 };
             };
         };

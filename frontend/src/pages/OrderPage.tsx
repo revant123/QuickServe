@@ -18,6 +18,9 @@ const STEPS: { status: OrderStatus; label: string }[] = [
   { status: 'DELIVERED', label: 'Delivered' },
 ]
 
+// Phase 14: the code matters from the moment a rider could be on the way.
+const WITH_CODE = new Set<OrderStatus>(['ACCEPTED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY'])
+
 const ENDED: Partial<Record<OrderStatus, string>> = {
   CANCELLED: 'This order was cancelled.',
   REJECTED: 'The restaurant could not take this order. Any payment is refunded.',
@@ -91,6 +94,23 @@ export function OrderPage() {
             )}
           </div>
         </section>
+
+        {o.delivery_code && WITH_CODE.has(o.status) && (
+          <section className="panel code-panel" aria-labelledby="code-title">
+            <div className="panel-body">
+              <h2 id="code-title" className="section-title">
+                Delivery code
+              </h2>
+              <p className="delivery-code" aria-label={`Delivery code ${o.delivery_code.split('').join(' ')}`}>
+                {o.delivery_code}
+              </p>
+              <p className="muted small">
+                {o.rider_name ? `${o.rider_name} is delivering your order. ` : ''}Tell this code to your delivery partner at the door, after you have the food. Never
+                share it on a phone call.
+              </p>
+            </div>
+          </section>
+        )}
 
         {o.status === 'PLACED' && (
           <section className="panel" aria-labelledby="pay-title">
