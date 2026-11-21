@@ -117,7 +117,8 @@ if [[ -n "$ALREADY_DEPLOYED" && "${TAG:-}" == "main" ]]; then
   kubectl -n "$NS" rollout restart deployment/api deployment/worker deployment/notifier deployment/web
 fi
 
-echo "Waiting for the API, the worker, the notifier and the customer app..."
+echo "Waiting for Jaeger, the API, the worker, the notifier and the customer app..."
+kubectl -n "$NS" rollout status deployment/jaeger --timeout=180s
 kubectl -n "$NS" rollout status deployment/api --timeout=300s
 kubectl -n "$NS" rollout status deployment/web --timeout=180s
 kubectl -n "$NS" rollout status deployment/worker --timeout=300s
@@ -152,6 +153,9 @@ echo "     (the browser warns about the certificate until you trust QuickServe's
 echo
 echo "Or the API directly:"
 echo "  kubectl -n $NS port-forward service/api 8003:80          -> http://127.0.0.1:8003/docs"
+echo
+echo "Traces (Phase 15): https://jaeger.quickserve.localhost:8443 through the gateway, or:"
+echo "  kubectl -n $NS port-forward service/jaeger 16687:16686   -> http://127.0.0.1:16687"
 echo
 if has_monitoring; then
   echo "Monitoring (each in its own terminal):"

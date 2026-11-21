@@ -44,7 +44,7 @@ spec:
         - { protocol: TCP, port: 8443 }
 ---
 # Grafana: viewers come through the gateway (or a port-forward); it only talks
-# to Prometheus. No internet: no update checks, no plugin downloads.
+# to Prometheus and Jaeger. No internet: no update checks, no plugin downloads.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -69,6 +69,10 @@ spec:
         - podSelector: { matchLabels: { app.kubernetes.io/name: prometheus } }
       ports:
         - { protocol: TCP, port: 9090 }
+    - to: # the Jaeger data source (Phase 15)
+        - podSelector: { matchLabels: { app.kubernetes.io/name: jaeger } }
+      ports:
+        - { protocol: TCP, port: 16686 }
 ---
 # Alertmanager: alerts come from Prometheus; it sends email through Mailpit.
 apiVersion: networking.k8s.io/v1

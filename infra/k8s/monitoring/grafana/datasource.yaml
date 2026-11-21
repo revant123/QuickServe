@@ -8,3 +8,11 @@ datasources:
     url: http://prometheus:9090
     isDefault: true
     editable: false
+  # Phase 15: traces, next to the metrics. Explore -> Jaeger finds a trace by ID
+  # (the "Reference" an error message shows) or by service and duration.
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false

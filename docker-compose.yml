@@ -7,7 +7,8 @@
 #
 # 2) The whole stack in containers (profile "app"), the way a server runs it:
 #    database, Redis, a one-off migration job, the API (port 8001), the worker,
-#    the notifier and the customer app (port 8002, Phase 13).
+#    the notifier, the customer app (port 8002, Phase 13) and Jaeger, where
+#    traces show up (http://localhost:16686, Phase 15).
 #      docker compose --profile app up -d --build   build the image and start everything
 #      docker compose --profile app ps              see what is running
 #      docker compose --profile app logs -f api     follow the API's logs
@@ -27,6 +28,10 @@ x-app: &app
     REDIS_URL: redis://redis:6379/0
     ENVIRONMENT: local               # allows the dev JWT secret; never in production
     LOG_JSON: "true"
+    # Phase 15: send traces to Jaeger. The OTEL_* names are OpenTelemetry's
+    # standard, so pointing them at another backend needs no code change.
+    TRACING_ENABLED: "true"
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
   restart: unless-stopped            # come back after a crash or a Docker restart
 
 services:
@@ -179,6 +184,26 @@ services:
         limits:
           cpus: "0.25"
           memory: 64M
+
+  # Phase 15: traces. Jaeger v2 receives spans (OTLP), keeps the interesting
+  # ones (tail sampling) and shows them. Open http://localhost:16686
+  # Nothing depends on it: if Jaeger is down, the apps drop their spans and
+  # carry on. Tracing must never be the reason an order fails.
+  jaeger:
+    image: jaegertracing/jaeger:2.21.0
+    profiles: ["app"]
+    container_name: quickserve-jaeger
+    command: ["--config", "/etc/jaeger/config.yaml"]
+    volumes:
+      - ./infra/k8s/tracing/jaeger-config.yaml:/etc/jaeger/config.yaml:ro
+    ports:
+      - "16686:16686" # the UI. The OTLP ports (4317, 4318) stay inside Docker's network.
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
 
 volumes:
   pgdata:

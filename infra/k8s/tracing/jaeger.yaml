@@ -1,0 +1,81 @@
+# Jaeger: OTLP in (4317 gRPC from Envoy, 4318 HTTP from the Python services),
+# the UI out (16686, through the Gateway at https://jaeger.quickserve.localhost:8443).
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+spec:
+  selector:
+    app.kubernetes.io/name: jaeger
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+      appProtocol: grpc # tells Envoy Gateway to speak HTTP/2 to it
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+    - name: ui
+      port: 16686
+      targetPort: ui
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+spec:
+  replicas: 1 # traces live in this pod's memory; two pods would be two separate stores
+  strategy:
+    type: Recreate # same reason: never two at once
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jaeger
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: jaeger
+    spec:
+      automountServiceAccountToken: false # it never talks to the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: jaeger
+          image: jaegertracing/jaeger:2.21.0
+          args: ["--config", "/etc/jaeger/config.yaml"]
+          env:
+            # Tail sampling keeps errors and slow traces always, plus this
+            # share of the rest. 100 on a laptop; a few percent in production.
+            - name: TRACE_SAMPLE_PERCENT
+              value: "100"
+          ports:
+            - { name: otlp-grpc, containerPort: 4317 }
+            - { name: otlp-http, containerPort: 4318 }
+            - { name: ui, containerPort: 16686 }
+            - { name: health, containerPort: 13133 }
+          readinessProbe:
+            httpGet: { path: /status, port: health }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /status, port: health }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 25m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi } # memory_limiter in the config stops at 150 MiB
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true # memory storage: nothing is written to disk
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/jaeger
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: jaeger-config

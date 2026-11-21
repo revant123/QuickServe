@@ -73,10 +73,13 @@ api.use(auth)
 export class ApiError extends Error {
   readonly status: number
   readonly body: unknown
-  constructor(status: number, message: string, body: unknown) {
+  /** The API's trace ID for this request (X-Trace-Id, Phase 15), if tracing is on. */
+  readonly traceId: string | null
+  constructor(status: number, message: string, body: unknown, traceId: string | null = null) {
     super(message)
     this.status = status
     this.body = body
+    this.traceId = traceId
   }
 }
 
@@ -99,7 +102,12 @@ export function errorMessage(body: unknown, status: number): string {
 /** openapi-fetch returns {data} or {error}; screens want the data or an exception. */
 export function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
   if (result.error !== undefined || !result.response.ok) {
-    throw new ApiError(result.response.status, errorMessage(result.error, result.response.status), result.error)
+    throw new ApiError(
+      result.response.status,
+      errorMessage(result.error, result.response.status),
+      result.error,
+      result.response.headers.get('X-Trace-Id'),
+    )
   }
   return result.data as T
 }

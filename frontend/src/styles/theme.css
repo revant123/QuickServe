@@ -1694,6 +1694,18 @@ fieldset.row {
   margin: 0;
 }
 
+.error-box .reference {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.error-box .reference code {
+  font-family: ui-monospace, monospace;
+  user-select: all; /* one tap selects the whole ID for copying */
+}
+
 /* On a phone, the two-column wrappers disappear: their children join the page's
    single column in source order. */
 .col-main,

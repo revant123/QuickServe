@@ -2,6 +2,7 @@
 #
 #   https://quickserve.localhost:8443          -> the API (Swagger at /docs)
 #   https://grafana.quickserve.localhost:8443  -> Grafana
+#   https://jaeger.quickserve.localhost:8443   -> Jaeger, traces (Phase 15)
 #
 # Needs two cluster add-ons that infra/k8s/addons.sh installs first:
 #   Envoy Gateway  - turns Gateway and HTTPRoute objects into a running Envoy proxy

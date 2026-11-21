@@ -103,3 +103,20 @@ spec:
     - backendRefs:
         - name: grafana
           port: 3000
+---
+# Jaeger's UI (Phase 15). Like Grafana here, it has no login: fine on a
+# laptop, never on the internet (put it behind SSO or a VPN).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: jaeger
+spec:
+  parentRefs:
+    - name: quickserve
+      sectionName: https
+  hostnames:
+    - jaeger.quickserve.localhost
+  rules:
+    - backendRefs:
+        - name: jaeger
+          port: 16686

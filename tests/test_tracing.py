@@ -20,7 +20,7 @@ from app import notifier, worker
 from app.core import tracing
 from app.core.config import Settings
 from app.core.metrics import SUSPECTED_N_PLUS_ONE
-from app.database.session import engine
+from app.database.session import SessionLocal, engine
 from app.main import app
 from app.modules.outbox.model import OutboxEvent
 from tests.conftest import SECTOR_22, TEST_PASSWORD
@@ -40,7 +40,9 @@ def traced():
     # tracing is set up before the first request. Drop it so it's rebuilt with
     # the tracing middleware, exactly as in production.
     app.middleware_stack = None
-    FastAPIInstrumentor.instrument_app(app, tracer_provider=PROVIDER, excluded_urls="health,metrics")
+    FastAPIInstrumentor.instrument_app(
+        app, tracer_provider=PROVIDER, excluded_urls="health,metrics", exclude_spans=["send", "receive"]
+    )
     yield
     FastAPIInstrumentor.uninstrument_app(app)
     app.middleware_stack = None
@@ -244,3 +246,17 @@ def test_a_failing_statement_is_a_failed_sql_span(db):
     [sql] = [s for s in EXPORTER.get_finished_spans() if s.attributes.get("db.system.name") == "postgresql"]
     assert sql.name == "SELECT no_such_table"
     assert sql.status.status_code is StatusCode.ERROR
+
+
+def test_paying_reads_the_order_items_once(db, restaurant, customer, make_item):
+    """A trace showed order_items read twice per payment; now only under the lock."""
+    from app.modules.orders.service import place_order
+    from app.modules.payments.schema import SimulatedOutcome
+    from app.modules.payments.service import pay
+    from tests.helpers import order_payload
+
+    order = place_order(db, order_payload(restaurant, (make_item(stock=5), 1)), customer)
+    with SessionLocal() as fresh, tracing.query_audit() as audit:  # a new session, like a new request
+        pay(fresh, order.id, "trace-pay-once", SimulatedOutcome.success, fresh.get(type(customer), customer.id))
+    reads = sum(n for statement, n in audit.statements.items() if "FROM order_items" in statement)
+    assert reads == 1

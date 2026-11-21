@@ -1,0 +1,92 @@
+# Jaeger v2 (Phase 15). Jaeger v2 IS an OpenTelemetry Collector with Jaeger's
+# storage and UI built in, so this one small container receives spans, decides
+# which traces to keep, stores them and serves the UI. Docker Compose mounts
+# this same file; Kubernetes loads it as a ConfigMap.
+#
+# At scale you'd split it: OpenTelemetry Collectors in front (batching, tail
+# sampling, sending to any backend) and Jaeger, Tempo or a vendor behind, with
+# real storage (Elasticsearch, Cassandra, object storage) instead of memory.
+
+service:
+  extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      # Order matters: protect memory first, then decide, then batch what's kept.
+      processors: [memory_limiter, tail_sampling, batch]
+      exporters: [jaeger_storage_exporter]
+  telemetry:
+    logs:
+      level: info
+
+extensions:
+  healthcheckv2:
+    use_v2: true
+    http:
+      endpoint: 0.0.0.0:13133
+  jaeger_query:
+    storage:
+      traces: memstore
+  jaeger_storage:
+    backends:
+      memstore:
+        memory:
+          # Traces are kept in RAM and lost on restart: right for learning,
+          # wrong for production. 10,000 traces is plenty for a laptop.
+          max_traces: 10000
+
+receivers:
+  otlp:
+    protocols:
+      grpc: # Envoy sends here
+        endpoint: 0.0.0.0:4317
+      http: # the Python services send here
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # If spans arrive faster than they can be handled, refuse new ones instead of
+  # growing until the container is killed. Senders drop spans; apps carry on.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 150
+    spike_limit_mib: 30
+
+  # TAIL sampling: wait until a trace is complete, THEN decide whether to keep
+  # it, knowing how it ended. Head sampling (deciding at the first request) has
+  # to guess before anything has happened, so it throws away rare errors as
+  # readily as boring successes. A trace is kept if ANY policy matches.
+  tail_sampling:
+    decision_wait: 10s # how long to wait for a trace's last spans
+    num_traces: 20000 # traces held in memory while waiting
+    expected_new_traces_per_sec: 20
+    decision_cache:
+      # Spans that arrive AFTER the decision (the notifier, seconds later)
+      # follow the decision instead of being dropped.
+      sampled_cache_size: 20000
+    policies:
+      - name: keep-errors # every failed request or event
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: keep-slow # anything slower than half a second
+        type: latency
+        latency:
+          threshold_ms: 500
+      - name: keep-n-plus-one # requests the N+1 detector flagged
+        type: boolean_attribute
+        boolean_attribute:
+          key: quickserve.n_plus_one
+          value: true
+      - name: sample-the-rest # a share of the ordinary, fast, successful ones
+        type: probabilistic
+        probabilistic:
+          # 100 locally, so every click shows up. In production 5-10: the
+          # errors and slow requests above are kept regardless.
+          sampling_percentage: ${env:TRACE_SAMPLE_PERCENT:-100}
+
+  batch:
+    timeout: 2s
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: memstore

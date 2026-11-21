@@ -92,7 +92,11 @@ def configure_tracing(
     RedisInstrumentor().instrument(tracer_provider=provider)
     if app is not None:
         # Probes and Prometheus scrapes would be thousands of useless traces a day.
-        FastAPIInstrumentor.instrument_app(app, tracer_provider=provider, excluded_urls="health,metrics")
+        # exclude_spans: no extra span per ASGI "send"/"receive" message (three
+        # zero-length "http send" spans on every response, pure noise).
+        FastAPIInstrumentor.instrument_app(
+            app, tracer_provider=provider, excluded_urls="health,metrics", exclude_spans=["send", "receive"]
+        )
     log.info("tracing enabled", extra={"fields": {"service": service_name}})
     return True
 

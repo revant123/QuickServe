@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, GitHub Actions; React + TypeScript apps for customers, restaurants and riders (Vite, TanStack Query) served by nginx. **271 backend tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages, plus **49 frontend tests** and end-to-end browser journeys.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, OpenTelemetry and Jaeger, GitHub Actions; React + TypeScript apps for customers, restaurants and riders (Vite, TanStack Query) served by nginx. **285 backend tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages, plus **52 frontend tests** and end-to-end browser journeys.
 
 ---
 
@@ -38,6 +38,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
    - [Discovery: near me, search and ratings (Phase 12)](#discovery-near-me-search-and-ratings-phase-12)
    - [Customer app (Phase 13)](#customer-app-phase-13)
    - [Restaurant and rider apps (Phase 14)](#restaurant-and-rider-apps-phase-14)
+   - [Tracing (Phase 15)](#tracing-phase-15)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -241,6 +242,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
 | Restaurant and rider apps (Phase 14) | [Partner and rider Q&A](#restaurant-and-rider-apps-phase-14); `app/modules/orders/dispatch.py` (pool, claim, rider's day), `app/modules/orders/kitchen.py` (order board, sales and payout), the delivery code in `app/modules/orders/service.py`, `frontend/src/partner/`, `frontend/src/rider/`, `tests/test_partners.py` |
+| Tracing (Phase 15) | [Tracing Q&A](#tracing-phase-15); `app/core/tracing.py` (setup, SQL spans, N+1 detector, trace helpers), `trace_parent` in `app/modules/outbox/`, `app/notifier.py`, `infra/k8s/tracing/` (Jaeger v2 and its config), `scripts/trace_check.py`, `tests/test_tracing.py` |
 | Customer app (Phase 13) | [Customer app Q&A](#customer-app-phase-13); `frontend/` (React + TypeScript, types generated from `frontend/openapi.json`, nginx with CSP and cache headers), `infra/k8s/base/web.yaml`, the `web` route in `infra/k8s/gateway/routes.yaml`, `GET /orders` and `GET /restaurants/{id}`, `tests/test_openapi_contract.py`, `tests/test_app_endpoints.py`, the `frontend` job in CI |
 | Discovery: near me, search, ratings (Phase 12) | [Discovery Q&A](#discovery-near-me-search-and-ratings-phase-12); `app/modules/discovery/` (near me, ETA, Bayesian rating, search), `app/modules/reviews/`, `app/modules/pricing/geo.py` (bounding box), `tests/test_discovery.py`, `tests/test_reviews.py` |
 | Pricing, coupons and surge (Phase 11) | [Pricing Q&A](#pricing-like-zomato-and-swiggy-phase-11); `app/modules/pricing/` (calculator, geo, rain switch), `app/modules/coupons/`, `POST /orders/quote`, `tests/test_pricing.py`, `tests/test_checkout.py` |
@@ -266,7 +268,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Orders | All-or-nothing placement, itemised bill, price snapshots, status machine with actor rules, cancellation rules, full timeline, rider claims with one active delivery per rider, delivery codes | Push dispatch and batching, live rider location |
 | Payments | Mock gateway, idempotency keys, one-success-per-order rule, refunds on rejection/cancellation | Real gateway, webhooks |
 | Background jobs | A separate worker (`python -m app.worker`) expires unpaid orders and auto-rejects orders the restaurant didn't accept, every 30 seconds; safe to run several (`FOR UPDATE SKIP LOCKED`); graceful shutdown | |
-| Caching, logs and metrics | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses; Prometheus metrics (RED + business), 6 tested alert rules, a Grafana dashboard with cost per order; Alertmanager emails with grouping, inhibition and a Watchdog; a rightsizing report priced in USD | Tracing, real cost data (OpenCost) |
+| Caching, logs and metrics | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses; Prometheus metrics (RED + business), 6 tested alert rules, a Grafana dashboard with cost per order; Alertmanager emails with grouping, inhibition and a Watchdog; a rightsizing report priced in USD; OpenTelemetry traces from the gateway through the API, SQL, Redis and the outbox to the notifier, tail-sampled in Jaeger, with an N+1 detector | Browser spans, exemplars, real cost data (OpenCost) |
 | Apps | React + TypeScript apps for customers, restaurant partners (order board, menu, sales and payout, offers) and riders (pool, pickup, delivery code, earnings), served by nginx through the Gateway, typed from the OpenAPI contract | Notifications in the app, `httpOnly` cookie login, push updates instead of polling, restaurant onboarding |
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
 | DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), Kubernetes manifests deployed and tested on a kind cluster in every CI run (rolling update with zero failed requests), liveness/readiness checks, pinned and locked dependencies, an HTTPS front door (Gateway API with Envoy Gateway, certificates from cert-manager, host routing, an edge rate limit), network policies (default deny, one allow-list per component, enforcement proven in CI) | Applying the Terraform to a real AWS account, mTLS between pods |
@@ -3245,6 +3247,232 @@ Three windows are needed because each login lives in one tab's `sessionStorage` 
 
 ---
 
+### Tracing (Phase 15)
+
+Logs tell you **what** happened, and metrics tell you **how often and how slow on average**. Neither answers the question you ask when one customer says "paying took ages": **where did the time go for that request?** A **trace** answers it. It's the whole story of one request (the gateway, the API, every SQL statement and Redis command, and the notifier seconds later) drawn as a timeline in **Jaeger**.
+
+This is a real trace from QuickServe: a customer paying for an order. `scripts/trace_check.py` prints the same tree that Jaeger draws:
+
+```
+POST /api/v1/orders/{order_id}/payments      +   0.0 ms   25.3 ms  quickserve-api
+  EXISTS                                     +   2.1 ms    0.4 ms  quickserve-api       (Redis: is the token logged out?)
+  SELECT users                               +   3.4 ms    0.5 ms  quickserve-api
+  SELECT orders                              +   6.7 ms    0.7 ms  quickserve-api
+  SELECT payments                            +   9.0 ms    0.7 ms  quickserve-api       (idempotency key seen before?)
+  SELECT orders                              +  10.9 ms    0.6 ms  quickserve-api       (again, FOR UPDATE)
+  SELECT order_items                         +  13.0 ms    0.5 ms  quickserve-api
+  ...
+  INSERT payments                            +  17.4 ms    0.6 ms  quickserve-api
+  UPDATE orders                              +  20.4 ms    0.6 ms  quickserve-api
+  INSERT outbox_events                       +  21.5 ms    0.6 ms  quickserve-api
+  process order.status_changed               + 136.7 ms    4.0 ms  quickserve-notifier  (114 ms later, another process)
+    INSERT notifications                     + 137.8 ms    0.7 ms  quickserve-notifier
+    INSERT notifications                     + 139.2 ms    0.6 ms  quickserve-notifier
+19 spans, 16 of them SQL statements
+```
+
+The last three lines are the interesting part. The notifier is a separate process that reads the outbox table (Phase 8), yet its work appears **in the same trace**, under the request that caused it, with the gap showing exactly how long the event waited.
+
+```mermaid
+flowchart LR
+    B[Browser] -->|HTTPS| E[Envoy gateway]
+    E -->|traceparent header| A[API]
+    A --> P[(PostgreSQL)]
+    A --> R[(Redis)]
+    A -->|traceparent column| O[(outbox_events)]
+    O --> N[Notifier]
+    E -. OTLP gRPC .-> J[Jaeger v2]
+    A -. OTLP HTTP .-> J
+    N -. OTLP HTTP .-> J
+    W[Worker] -. OTLP HTTP .-> J
+    J --> T{tail sampling}
+    T -->|keep| S[(memory store)] --> U[Jaeger UI]
+```
+
+### Q: What are traces, spans and context propagation?
+
+- **A span** is one timed step: an HTTP request, one SQL statement, one Redis command. It has a start time, a duration, a name, attributes (`db.query.text`, `http.route`) and a parent.
+- **A trace** is every span that shares one **trace ID**, a 128-bit random number. Parents and children make a tree.
+- **Context propagation** is how the trace ID crosses from one process to the next. Over HTTP it travels in the **W3C `traceparent` header**, which the W3C Trace Context recommendation calls a common format for the incoming request that all vendors understand [128]. Its example is `traceparent: 00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01`: the version, the trace ID, the parent span's ID and the sampling flag.
+
+The idea goes back to Google's **Dapper** paper (2010). Two of the design choices it credits for its success are using sampling and keeping the instrumentation in a small number of common libraries [129]. QuickServe follows the second exactly: application code barely mentions tracing. A few libraries (FastAPI, Redis, SQLAlchemy's events) produce almost every span.
+
+### Q: How is QuickServe instrumented?
+
+With **OpenTelemetry**, the vendor-neutral standard, using its Python SDK [127]. The same code could send to Jaeger, Grafana Tempo, AWS X-Ray or Datadog by changing one environment variable. `app/core/tracing.py` holds all of it:
+
+| What | How | Spans |
+|---|---|---|
+| HTTP requests | `FastAPIInstrumentor` | one server span per request, named by route (`POST /api/v1/orders`) |
+| Redis | `RedisInstrumentor` | `EXISTS`, `GET`, `INCR`... (logout deny list, rate limits, menu cache) |
+| SQL | QuickServe's own `instrument_sql()` (see the next question) | `SELECT orders`, `INSERT payments`... |
+| Outbox → notifier | `traceparent` saved with the event; `continue_trace()` in the notifier | `process order.status_changed` (a CONSUMER span) |
+| Worker | one span per pass | `worker.timeouts` |
+| Business steps | `tracer.start_as_current_span` | `pricing.bill` (item total, distance, surge reasons, grand total), a `coupon rejected` event, `quickserve.claim=won/lost` on rider claims |
+
+These settings keep the cost down:
+- **Tracing is off unless `TRACING_ENABLED=true`.** Tests and a bare `uvicorn` run never load the SDK. Docker Compose and Kubernetes turn it on.
+- **Spans are sent in the background.** A `BatchSpanProcessor` queues them in memory and a background thread sends a batch every few seconds. If Jaeger is down, spans are dropped, and **nothing in Compose or Kubernetes depends on Jaeger**: tracing must never be the reason an order fails.
+- **The exporter speaks OTLP over HTTP, not gRPC.** That avoids the `grpcio` wheel and keeps the image smaller.
+- **Health checks and Prometheus scrapes are not traced** (`excluded_urls="health,metrics"`). Kubernetes probes alone would otherwise create thousands of useless traces a day.
+- **No personal data.** SQL spans carry the statement with placeholders (`WHERE users.email = %(email_1)s`), never the values. Business spans carry amounts and reasons, never names, addresses or phone numbers. A test checks that a phone number passed as a parameter doesn't appear in any span.
+
+### Q: Why does QuickServe write its own SQL tracing?
+
+Because the official library silently did nothing. OpenTelemetry's SQLAlchemy instrumentation declares that it supports `sqlalchemy >= 1.0.0, < 2.1.0`, and QuickServe uses SQLAlchemy 2.1.9. Outside that range, `instrument()` logs one warning and installs nothing: no error, no SQL spans. The first tracing test caught it, because it asserts that a request's trace contains SQL spans.
+
+There were two fixes. One was to force the library on (`skip_dep_check=True`) and hope its internals still matched SQLAlchemy 2.1. The other was to do what it does, which is small. SQLAlchemy fires an event before and after every statement on a connection:
+
+```python
+@event.listens_for(engine, "before_cursor_execute")
+def _start(conn, cursor, statement, parameters, context, executemany):
+    span = sql_tracer.start_span(name, kind=SpanKind.CLIENT, attributes={"db.query.text": statement, ...})
+    conn.info.setdefault(_SPANS, []).append(span)
+
+@event.listens_for(engine, "after_cursor_execute")
+def _end(conn, cursor, statement, parameters, context, executemany):
+    conn.info[_SPANS].pop().end()
+```
+
+…plus a `handle_error` listener that marks a failed statement as an error. It's about 40 lines that QuickServe understands and tests, with no dependency on a beta package's version range. This is also a good look at what "auto-instrumentation" means: the library hooks into events the framework already has.
+
+### Q: How does a trace survive the trip through the outbox?
+
+With a column. A message queue would carry the `traceparent` in a message header. QuickServe's queue is the `outbox_events` table, so the producer stores it in a new `trace_parent` column, in the same transaction as the event (`outbox.record()` calls `current_traceparent()`). The OpenTelemetry messaging conventions describe this requirement: the producer creates a message creation context that should be propagated to the consumer, and without it, consumer traces can't be directly correlated with producer traces [130].
+
+The notifier then reads the column, restores that context, and handles the event inside a **CONSUMER** span. The conventions use producer and consumer span kinds so that analysis tools can interpret linked traces [130]. The span carries `messaging.*` attributes and `quickserve.event.wait_ms`, the time the event sat in the outbox.
+
+**A bug the tests caught.** The notifier polls the outbox every second. Traced, that would be about 86,000 near-empty traces a day of `SELECT ... FOR UPDATE SKIP LOCKED`, so the polling runs with instrumentation **suppressed**. The first version then passed the saved context as the new span's *parent*. The span landed in the right trace, but the SQL inside it vanished. The "suppressed" flag lives in the *current* context, and the new span had inherited it. The fix (`continue_trace()`) *attaches* the saved context, built from an empty one, before starting the span. A test asserts both halves: the consumer span sits under the producer's span, and its `INSERT notifications` statements are inside it.
+
+### Q: Head or tail sampling: which requests get kept?
+
+Keeping every trace costs storage and money, and OpenTelemetry's own documentation calls sampling one of the most effective ways to cut observability costs without losing visibility [131]. There are two places to decide:
+
+- **Head sampling** decides at the start of a request, before anything has happened, typically keeping a fixed fraction. It's cheap and simple. Its main weakness, in OpenTelemetry's words, is that it can't base the decision on data from the whole trace [131], so it throws away a rare error as readily as a boring success. Dapper's first production version sampled uniformly, about one trace in every 1,024 [129].
+- **Tail sampling** waits until a trace is complete, then decides knowing how it ended. OpenTelemetry says larger systems that need to sample almost always need tail sampling to balance data volume against usefulness [131].
+
+QuickServe uses **both**:
+1. **Envoy at the edge samples 100%** of requests (`samplingRate: 100` in the `EnvoyProxy`). Envoy Gateway's documentation warns that 100% may cause performance issues at very high traffic, and that the rate is adjustable [132]. Everything downstream follows Envoy's decision through the `traceparent` sampling flag.
+2. **Jaeger then tail-samples.** It keeps a trace if **any** of these is true:
+   - it contains an error;
+   - it took longer than 500 ms;
+   - the N+1 detector flagged it;
+   - it falls in a random share of the rest (`TRACE_SAMPLE_PERCENT`: 100 on a laptop, so every click shows up; around 5 to 10 in production).
+
+The catch with tail sampling is that every span of a trace must reach **the same** collector instance, because spans are grouped by trace ID before the decision [133]. With several collectors, you put a load balancer that routes by trace ID in front. Spans that arrive after the decision (the notifier, seconds later) follow the decision, thanks to the `decision_cache` setting.
+
+There's a nice consequence for support. When the app shows a server error, it prints the trace ID ("Reference: 4bf92f35…", taken from the `X-Trace-Id` response header). Errors are always kept, so that reference always leads to a trace.
+
+### Q: What does tracing cost? (FinOps)
+
+It costs three things: CPU in the app, network, and above all **storage of the spans**. Measured on QuickServe (the OTLP bytes the exporter would send, in the test suite), one payment request produced 13 spans and **8.9 KB** of data, about 680 bytes per span.
+
+Here's a rough monthly bill at a steady 50 requests a second, using Grafana Cloud's list prices for traces: from $0.05 per GB processed, $0.40 per GB written and $0.10 per GB retained, after a free 50 GB a month [134]. Every request is assumed to look like the payment.
+
+| | Data per month | Cost per month (process + write) |
+|---|---|---|
+| Send everything | 50 × 86,400 × 30 × 8,885 bytes ≈ **1,150 GB** | ≈ $500 |
+| Tail-sample in your own collector (say 1% errors and slow requests, all kept, plus 10% of the rest ≈ 11%) | ≈ **127 GB** | ≈ $35 |
+
+That's the same visibility of what goes wrong, for about a tenth of the price. The sampling runs in **your** collector, so the dropped 90% is never sent or billed. The flip side is the cost of running that collector, which OpenTelemetry lists among the costs of sampling [131]. QuickServe's runs inside Jaeger: one container, 256 MiB.
+
+Running Jaeger yourself instead swaps the vendor bill for storage you operate. In-memory storage, as here, holds 10,000 traces and loses them on restart: right for a laptop, wrong for production (that needs Elasticsearch, Cassandra or object storage).
+
+### Q: Why is Jaeger a single container?
+
+Because **Jaeger v2 is an OpenTelemetry Collector**. The maintainers rebuilt it on the Collector, and it can tail-sample using the upstream contrib processor [135]. Jaeger v1 reached end of life in December 2025 [136]. One 50 MB image receives spans (OTLP on 4317 and 4318), tail-samples them, stores them in memory and serves the UI on 16686. The config file (`infra/k8s/tracing/jaeger-config.yaml`) is a standard Collector pipeline:
+
+```yaml
+pipelines:
+  traces:
+    receivers: [otlp]
+    processors: [memory_limiter, tail_sampling, batch] # protect memory, decide, then batch what's kept
+    exporters: [jaeger_storage_exporter]
+```
+
+Docker Compose mounts that same file, and Kubernetes loads it as a ConfigMap. It was also checked by running the real Jaeger 2.21 binary against it locally before CI did.
+
+At scale you split the roles: OpenTelemetry Collectors as agents and gateways (batching, tail sampling, sending anywhere), and a storage backend behind them.
+
+Jaeger traces its own UI's API calls too, so you'll see a service called `jaeger` in the list.
+
+### Q: How do logs, metrics and traces connect?
+
+Through the trace ID:
+- **Logs → traces.** Every JSON log line now has `"trace_id"`, stamped when the record is created (like `request_id` in Phase 4). Find a scary log line, then open its trace.
+- **Traces → logs.** Search the logs for a slow trace's ID to read everything that request logged.
+- **Metrics → traces.** The `quickserve_suspected_n_plus_one_total{route}` counter tells you which route is misbehaving, and the tail sampler keeps those traces so you can see the staircase of queries.
+- **Browser → traces.** Server errors show the trace ID as a "Reference", and support pastes it into Jaeger (or Grafana: the full overlay adds Jaeger as a Grafana data source).
+
+The request log line also gained `"queries": N`, the number of SQL statements the request ran. That's a cheap way to spot a heavy endpoint in the logs without opening a trace.
+
+### Q: What is the N+1 detector?
+
+It's a guard for the problem from [section 5](#5-orm-vs-writing-sql-by-hand). An N+1 is code that runs one query for a list, then one more per row. It works, passes tests, and gets slower with every row. In a trace it looks like a staircase of identical SQL spans. The detector notices it without anyone looking:
+
+1. A `before_cursor_execute` listener counts each statement, **per request**, in a `ContextVar`. SQLAlchemy sends statements with placeholders, so the same query for different rows has the same text and counts together.
+2. At the end of the request, the counts go on the server span (`db.query_count`, `db.max_repeated_query`).
+3. If one statement ran **10 or more times** (`N_PLUS_ONE_THRESHOLD`), the request is flagged:
+   - a warning log line with the statement;
+   - `quickserve_suspected_n_plus_one_total{route}` goes up;
+   - the span gets `quickserve.n_plus_one=true`, which the tail sampler always keeps.
+
+It works with tracing off too: the log line and the metric don't need Jaeger. No QuickServe route trips it today (the pages that list things were written to avoid N+1 in earlier phases), and tests check both that a staircase *is* flagged and that many *different* statements are not.
+
+### Q: Did tracing find anything real?
+
+Yes, on its first real trace. A payment loaded the order's items **twice**: once in the quick ownership check before the lock, and again under `SELECT ... FOR UPDATE`. The cause was the relationship's eager loading (`lazy="selectin"`), which loads items whenever an order is loaded, whether or not the code needs them. The pre-check only reads `customer_id`, so it now loads the order with `lazyload(Order.items)`. That's one query fewer per payment. A test (which fails without the fix) counts the `order_items` reads.
+
+It's a typical tracing find: nothing was broken and every test passed. It was only visible as an extra line in a timeline.
+
+The same first trace also showed three zero-length `http send` spans on every response. These are internal ASGI events, pure noise, and `exclude_spans=["send", "receive"]` removed them.
+
+### Q: How do I see traces?
+
+**Docker Compose** (lightest on a Mac). Jaeger starts with the rest of the stack:
+
+```bash
+docker compose --profile app up -d --build
+docker compose --profile app exec api python -m scripts.seed
+python3 scripts/trace_check.py        # places an order and prints its trace
+```
+
+Open http://localhost:16686, choose the service `quickserve-api`, and click **Find Traces**. Click any trace to see the timeline, then click a span to see its attributes (the SQL statement, `quickserve.grand_total`, `db.query_count`).
+
+Things to try:
+- Pay for an order in the app, then find the payment trace. The notifier's `process order.status_changed` span sits under it.
+- Search by tag `error=true`, after (say) stopping Redis for a moment.
+- Paste the **Reference** from an error message into Jaeger's search box.
+
+**Kubernetes:** `infra/k8s/deploy.sh` now deploys Jaeger too (lite included: it needs about 100 MB). Open https://jaeger.quickserve.localhost:8443 through the gateway port-forward. Each trace there starts with **Envoy's span**, the time spent at the gateway, TLS included, before the API's.
+
+### Q: How is it tested?
+
+- **14 new backend tests (285 in total), in `tests/test_tracing.py`.** They run with an in-memory span exporter instead of Jaeger and cover:
+  - a request is one trace with its SQL inside, and its `X-Trace-Id` and log line match;
+  - health checks aren't traced, and server errors are marked on the trace;
+  - the notifier continues the paying request's trace (right parent, SQL inside, no stray polling spans), and a failing event is an error;
+  - bad `traceparent` values start a fresh trace;
+  - worker passes and pricing get their own spans;
+  - a failed statement is a failed span, and parameter values never appear in spans;
+  - the N+1 detector flags a staircase but not many different statements;
+  - a payment reads `order_items` once;
+  - tracing stays off unless enabled.
+- **3 new frontend tests (52 in total):** the error box shows the reference for 5xx errors but not 4xx, and the API client keeps `X-Trace-Id`.
+- **CI, Docker job:** `scripts/trace_check.py` places a real order through the Compose stack and waits until Jaeger has one trace containing both `quickserve-api` and `quickserve-notifier` spans. The tree goes into the run's summary.
+- **CI, Kubernetes jobs:**
+  - `gateway_check.sh` step 8 checks that a request through the gateway produces one trace with Envoy's span, the API's spans and SQL;
+  - `netpol_check.sh` checks that only the API, worker and notifier can reach Jaeger's OTLP port, and that the API can't reach its UI.
+
+### Q: What's not built yet?
+
+- **Browser spans** (real-user monitoring). The trace starts at Envoy. The browser only receives the trace ID. Sending spans from phones needs a public OTLP endpoint, abuse protection and a much bigger JavaScript bundle.
+- **Exemplars.** Prometheus can attach a trace ID to a latency histogram bucket, so a spike on a Grafana graph links straight to an example trace.
+- **Span metrics.** Jaeger's `spanmetrics` connector can compute request rate, errors and duration per operation from the traces themselves.
+- **Durable trace storage** and a separate collector tier, for production.
+
+---
+
 ## 9. DevOps already in the project
 
 ### Q: Why do the tests use a real PostgreSQL instead of SQLite?
@@ -3430,6 +3658,8 @@ These are real, and they make better interview stories than any feature list.
 
 **10. A button that was there but couldn't be seen (Phase 14).** All 48 frontend tests passed, including one that clicks "Reject". Then the first screenshot of the order board showed an empty red box where the Reject button should be. The button had the classes `btn ghost danger`. A new `.btn.danger` rule (a solid red button for the dialog's final "Reject order") also matched it, gave it a red background, and its red text vanished into it. Testing Library finds a button by its role and name, not by whether a person can read it, so the tests couldn't notice. **Fix:** `.btn.danger:not(.ghost)`. The lesson: **tests check what the code does; only looking at the screen checks what people see.** The Playwright journey now saves screenshots of every screen for that reason.
 
+**11. Tracing that silently traced nothing, then lost its SQL (Phase 15).** The first tracing test asserted that a request's trace contains SQL spans, and it found none. OpenTelemetry's SQLAlchemy instrumentation supports only versions below 2.1. On SQLAlchemy 2.1.9 it logs one warning and installs nothing, without raising any error. **Fix:** about 40 lines of our own on SQLAlchemy's cursor events. The next test found a subtler gap. The notifier's events landed in the right trace, but with no SQL inside them, because the "suppress instrumentation" flag used while polling was still in the current context, and the new span inherited it. **Fix:** attach the saved trace context (built from an empty one) before starting the span. The lesson: **observability code fails quietly. Test that the telemetry exists, not just that the app works.**
+
 ---
 
 ## 12. Project structure and API
@@ -3443,8 +3673,9 @@ quickserve/
 │   │   ├── config.py             all settings (DB, pool, timeouts, fees, tax rates)
 │   │   ├── security.py           password hashing (Argon2), JWT create/verify
 │   │   ├── redis.py              shared Redis client (short timeouts, fail fast)
-│   │   ├── logging.py            JSON logs, request IDs
+│   │   ├── logging.py            JSON logs, request IDs, trace IDs
 │   │   ├── metrics.py            Prometheus metrics, counted only after commit
+│   │   ├── tracing.py            OpenTelemetry setup, SQL spans, N+1 detector, traceparent helpers (Phase 15)
 │   │   ├── exceptions.py         domain errors -> HTTP codes in one place
 │   │   └── money.py              Decimal rounding for bills
 │   ├── database/
@@ -3476,8 +3707,9 @@ quickserve/
 │   ├── export_openapi.py         writes frontend/openapi.json (the frontend's API contract)
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
+│   ├── trace_check.py            places an order and checks its trace in Jaeger (Phase 15)
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        271 tests, real PostgreSQL and Redis
+├── tests/                        285 tests, real PostgreSQL and Redis
 ├── frontend/                     the apps (Phases 13-14): React + TypeScript (Vite)
 │   ├── src/api/                  openapi-fetch client, generated schema.d.ts, TanStack Query hooks
 │   ├── src/pages/                customer: home, search, menu, cart, order, my orders, login
@@ -3496,7 +3728,8 @@ quickserve/
 │   │                             Alertmanager + Mailpit (Phase 8b)
 │   │   ├── gateway/              HTTPS front door (Phase 9): certificates, Gateway, routes, policies;
 │   │                             addons.sh installs Envoy Gateway + cert-manager, gateway_check.sh tests it
-│   │   └── network-policies/     who may talk to whom (Phase 10); netpol_check.sh proves it, smoke.sh runs tests
+│   │   ├── network-policies/     who may talk to whom (Phase 10); netpol_check.sh proves it, smoke.sh runs tests
+│   │   └── tracing/              Jaeger v2 and its collector config, shared with Docker Compose (Phase 15)
 │   ├── bootstrap/                budget alert + S3 state bucket, once per account
 │   ├── envs/dev/                 network, database, secrets, app server (+ tests/)
 │   └── modules/                  budget, network, database, app_server (each with tests/)
@@ -3504,7 +3737,7 @@ quickserve/
 ├── .github/workflows/ci.yml      six jobs: test, frontend, docker, publish (two images to ghcr.io), terraform, kubernetes (kind)
 ├── Dockerfile                    two-stage image, runs as user "app"
 ├── .dockerignore                 keeps venv/, .git/, tests and .env out of the image
-├── docker-compose.yml            db + redis; profile "app" adds migrate, api, worker
+├── docker-compose.yml            db + redis; profile "app" adds migrate, api, worker, notifier, jaeger and more
 ├── requirements.txt / requirements-dev.txt / requirements-dev.lock
 ├── requirements.lock             runtime-only pins the image installs
 ├── pyproject.toml                ruff and pytest settings
@@ -3580,12 +3813,18 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **12. Discovery** (done) | Restaurants near me (bounding box on an index, then the exact distance checkout uses), delivery time from Swiggy's max(first mile, prep) + last mile, sort by distance / time / Bayesian-average rating, cuisine and rating filters; dish and restaurant search with full-text, trigram and typo fallback; reviews only for delivered orders, once, with atomic running totals, a CHECK constraint and a recount job | Bounding boxes and B-trees, `EXPLAIN`, GIN indexes, generated columns, Bayesian averages, denormalised counters and reconciliation, lost updates |
 | **13. Frontend: customer app** (done) | React + TypeScript (Vite): near me, search, menu, cart, the checkout bill from `/orders/quote` with price-change handling, pay with one idempotency key per attempt, live order status, reviews, my orders; a royal Indian menu theme with regional borders; nginx with CSP and immutable caching, served on the same origin through the Gateway; a 150 KB JavaScript budget in CI | API types generated from OpenAPI with contract tests, server vs client state, token storage trade-offs, open redirects, HTTP caching, performance budgets, accessibility |
 | **14. Restaurant and rider apps** (done) | Partner app: order board with the accept countdown, reject reasons, menu switches and restocks, the day's sales with commission and payout, restaurant-funded offers, accepting-orders switch. Rider app: pool without addresses, race-safe claims, one active delivery per rider (partial unique index), pickup once ready, delivery with the customer's code (limited tries), earnings | Pull vs push dispatch, conditional UPDATE races, partial unique indexes, secure random codes and brute-force limits, aggregate FILTER, business days and time zones, payout maths |
-| **15. Tracing** (next) | OpenTelemetry traces across browser, Envoy, API, SQL, outbox and notifier, viewed in Jaeger; N+1 detection; sampling | Distributed tracing, context propagation through the outbox, the cost of tracing |
-| **16. Live on AWS** | Apply the Phase 6 Terraform, a real domain with a Let's Encrypt certificate, GitHub Actions deploying after each merge, a smoke test against the live URL, then `terraform destroy` | Continuous delivery, real cloud costs, why one server instead of EKS |
+| **15. Tracing** (done) | OpenTelemetry traces from Envoy through the API, SQL, Redis, the outbox and the notifier, viewed in Jaeger v2; trace IDs in logs, responses and error messages; tail sampling (errors, slow, N+1, a share of the rest); an N+1 detector; CI checks one order's trace end to end | Distributed tracing, context propagation through the outbox, the cost of tracing |
+| **16. Live on AWS** (next) | Apply the Phase 6 Terraform, a real domain with a Let's Encrypt certificate, GitHub Actions deploying after each merge, a smoke test against the live URL, then `terraform destroy` | Continuous delivery, real cloud costs, why one server instead of EKS |
 
 ---
 
 ## 14. Interview cheat sheet
+
+**What is distributed tracing, and how does the trace ID get from one service to the next?** A trace is a tree of timed spans (an HTTP request, each SQL statement, each Redis command) that share one trace ID. The ID travels in the W3C `traceparent` header over HTTP. Through a queue it must travel with the message: QuickServe saves it in a `trace_parent` column of the outbox, and the notifier continues the trace in a CONSUMER span, so one trace shows the request, the gap while the event waited, and the notification work.
+
+**Head vs tail sampling?** Head sampling decides at the start, cheaply, before anything has happened, so it drops rare errors as often as boring successes. Tail sampling decides when the trace is complete, so you can keep every error and slow request plus a small share of the rest. The cost: every span of a trace must reach the same collector, so with several collectors you route by trace ID. QuickServe's Envoy samples 100% and Jaeger tail-samples.
+
+**How do you find an N+1 query?** Count queries per request and the most repeated statement (same text with placeholders). QuickServe flags a request when one statement runs 10 or more times: a warning log, a metric by route, and an attribute that makes the tail sampler keep the trace.
 
 **How do you notify another service reliably when data changes?** The transactional outbox. Write the event to an `outbox_events` table in the same transaction as the change, so both commit or neither does. A separate relay delivers it later. Delivery is at-least-once, so the consumer must be idempotent: QuickServe uses a unique `(event_id, user_id)` constraint with `ON CONFLICT DO NOTHING`. Keep per-entity order by claiming only the oldest waiting event per order. Failures are retried with backoff and dead-lettered after 5 attempts.
 
@@ -3817,3 +4056,13 @@ Business and tax figures change often; the dates show when each was reported.
 124. web.dev, *Learn Responsive Design: Media queries*. https://web.dev/learn/design/media-queries
 125. Adrian Roselli, *It's Mid-2022 and Browsers (Mostly Safari) Still Break Accessibility via Display Properties* (which elements lose their meaning with `display: contents`). https://adrianroselli.com/2022/07/its-mid-2022-and-browsers-mostly-safari-still-break-accessibility-via-display-properties.html
 126. MDN Web Docs, *Media query fundamentals* (mobile-first design and choosing breakpoints). https://developer.mozilla.org/en-US/docs/Learn/CSS/CSS_layout/Media_queries
+127. OpenTelemetry Python documentation (SDK, `BatchSpanProcessor`, OTLP exporters). https://opentelemetry.io/docs/languages/python/
+128. W3C, *Trace Context* (Recommendation), section 3.1: the `traceparent` header. https://www.w3.org/TR/trace-context/
+129. Benjamin H. Sigelman, Luiz André Barroso, Mike Burrows, Pat Stephenson, Manoj Plakal, Donald Beaver, Saul Jaspan and Chandan Shanbhag, *Dapper, a Large-Scale Distributed Systems Tracing Infrastructure*, Google Technical Report (2010). https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/
+130. OpenTelemetry semantic conventions, *Semantic conventions for messaging spans* (message creation context, producer and consumer span kinds). https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/
+131. OpenTelemetry documentation, *Sampling* (head vs tail sampling, and the costs of sampling). https://opentelemetry.io/docs/concepts/sampling/
+132. Envoy Gateway documentation, *Proxy Tracing* (`telemetry.tracing.samplingRate`). https://gateway.envoyproxy.io/docs/tasks/observability/proxy-trace/
+133. OpenTelemetry Collector Contrib, *Tail Sampling Processor* README (all spans of a trace must reach the same collector; `decision_cache`). https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/processor/tailsamplingprocessor/README.md
+134. Grafana Labs, *Grafana Cloud pricing*: Traces (per GB processed, written and retained; free 50 GB a month). https://grafana.com/pricing/
+135. Jaeger maintainers, *Jaeger v2 released: OpenTelemetry in the core!*, CNCF blog (12 November 2024). https://www.cncf.io/blog/2024/11/12/jaeger-v2-released-opentelemetry-in-the-core/
+136. Jaeger, *Download* (Jaeger v1 reached end of life on 31 December 2025). https://www.jaegertracing.io/download/
