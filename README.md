@@ -12,7 +12,7 @@ It is built to learn three things properly:
 
 The business logic is modelled on how Zomato and Swiggy behave: restaurants must accept orders within a time limit, items can be switched off "until 6 pm", every bill is itemised with fees and GST, and payments are safe to retry. The centrepiece is the **stock / consumed / cycle** inventory design, which makes best sellers, sell-through, waste tracking and restock suggestions possible.
 
-**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, GitHub Actions; a React + TypeScript customer app (Vite, TanStack Query) served by nginx. **250 backend tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages, plus **38 frontend tests** and an end-to-end browser journey.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x (2.0-style API, pinned at 2.1.9), PostgreSQL 16, Redis 7, Alembic, pytest, Docker, Kubernetes (Gateway API, Envoy Gateway, cert-manager), Terraform, Prometheus, Grafana, GitHub Actions; React + TypeScript apps for customers, restaurants and riders (Vite, TanStack Query) served by nginx. **271 backend tests**, all run against real PostgreSQL and Redis, including concurrency tests with real threads, attacks on the login system and Redis outages, plus **48 frontend tests** and end-to-end browser journeys.
 
 ---
 
@@ -37,6 +37,7 @@ The business logic is modelled on how Zomato and Swiggy behave: restaurants must
    - [Pricing like Zomato and Swiggy (Phase 11)](#pricing-like-zomato-and-swiggy-phase-11)
    - [Discovery: near me, search and ratings (Phase 12)](#discovery-near-me-search-and-ratings-phase-12)
    - [Customer app (Phase 13)](#customer-app-phase-13)
+   - [Restaurant and rider apps (Phase 14)](#restaurant-and-rider-apps-phase-14)
 9. [DevOps already in the project](#9-devops-already-in-the-project)
 10. [FinOps: thinking in cost per order](#10-finops-thinking-in-cost-per-order)
 11. [Bugs the tests caught while building this](#11-bugs-the-tests-caught-while-building-this)
@@ -239,6 +240,7 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Use it to find and showcase the best seller | `GET /restaurants/{id}/best-sellers`; ranking explained in Section 4 |
 | Any other benefits of this design | The 11-point list in Section 4: sell-through, sold-out time, waste, badges, restock suggestion, audit trail and more |
 | Login, roles and permissions (Phase 3) | [Section 7](#7-login-tokens-and-permissions); `app/modules/auth/`, `app/core/security.py`, `tests/test_auth.py` |
+| Restaurant and rider apps (Phase 14) | [Partner and rider Q&A](#restaurant-and-rider-apps-phase-14); `app/modules/orders/dispatch.py` (pool, claim, rider's day), `app/modules/orders/kitchen.py` (order board, sales and payout), the delivery code in `app/modules/orders/service.py`, `frontend/src/partner/`, `frontend/src/rider/`, `tests/test_partners.py` |
 | Customer app (Phase 13) | [Customer app Q&A](#customer-app-phase-13); `frontend/` (React + TypeScript, types generated from `frontend/openapi.json`, nginx with CSP and cache headers), `infra/k8s/base/web.yaml`, the `web` route in `infra/k8s/gateway/routes.yaml`, `GET /orders` and `GET /restaurants/{id}`, `tests/test_openapi_contract.py`, `tests/test_app_endpoints.py`, the `frontend` job in CI |
 | Discovery: near me, search, ratings (Phase 12) | [Discovery Q&A](#discovery-near-me-search-and-ratings-phase-12); `app/modules/discovery/` (near me, ETA, Bayesian rating, search), `app/modules/reviews/`, `app/modules/pricing/geo.py` (bounding box), `tests/test_discovery.py`, `tests/test_reviews.py` |
 | Pricing, coupons and surge (Phase 11) | [Pricing Q&A](#pricing-like-zomato-and-swiggy-phase-11); `app/modules/pricing/` (calculator, geo, rain switch), `app/modules/coupons/`, `POST /orders/quote`, `tests/test_pricing.py`, `tests/test_checkout.py` |
@@ -261,11 +263,11 @@ Set `SQL_ECHO=true` in `.env` and restart uvicorn to see every SQL statement in 
 | Users and login | Registration, login with JWT access tokens, logout, login rate limiting (Redis), four roles (customer, restaurant owner, rider, admin), ownership checks on every restaurant and order, Argon2 password hashing via pwdlib as FastAPI's docs recommend [4] (passlib stopped working on Python 3.13 [23]) | Refresh tokens |
 | Restaurants | Create, list with pagination, packaging charge | Opening hours, delivery radius |
 | Menu and stock | Stock/consumed counters, stock cycles with archive, restock with or without carry-over, "out of stock until" timer, customer badges ("Only 3 left", "Selling fast") | Add-ons and variants (half/full plate) |
-| Orders | All-or-nothing placement, itemised bill, price snapshots, status machine with actor rules, cancellation rules, full timeline | Rider assignment, ETA |
+| Orders | All-or-nothing placement, itemised bill, price snapshots, status machine with actor rules, cancellation rules, full timeline, rider claims with one active delivery per rider, delivery codes | Push dispatch and batching, live rider location |
 | Payments | Mock gateway, idempotency keys, one-success-per-order rule, refunds on rejection/cancellation | Real gateway, webhooks |
 | Background jobs | A separate worker (`python -m app.worker`) expires unpaid orders and auto-rejects orders the restaurant didn't accept, every 30 seconds; safe to run several (`FOR UPDATE SKIP LOCKED`); graceful shutdown | |
 | Caching, logs and metrics | Redis cache for the customer menu with invalidation; JSON logs with a request ID on every line; safe 500 responses; Prometheus metrics (RED + business), 6 tested alert rules, a Grafana dashboard with cost per order; Alertmanager emails with grouping, inhibition and a Watchdog; a rightsizing report priced in USD | Tracing, real cost data (OpenCost) |
-| Customer app | React + TypeScript app for the whole customer journey, served by nginx through the Gateway, typed from the OpenAPI contract | Notifications in the app, `httpOnly` cookie login, push updates instead of polling |
+| Apps | React + TypeScript apps for customers, restaurant partners (order board, menu, sales and payout, offers) and riders (pool, pickup, delivery code, earnings), served by nginx through the Gateway, typed from the OpenAPI contract | Notifications in the app, `httpOnly` cookie login, push updates instead of polling, restaurant onboarding |
 | Analytics | Best sellers ranked by sales rate while in stock, sell-through, restock suggestion that corrects for sold-out cycles | Revenue reports, dashboards |
 | DevOps | Alembic migrations (tested up and down), multi-stage Dockerfile running as a non-root user, the whole stack in Docker Compose (database, Redis, migration job, API, worker), CI that tests the code, smoke-tests the built containers and publishes a two-chip image tagged by commit to ghcr.io, AWS infrastructure in Terraform (tested with mocks, not yet applied), Kubernetes manifests deployed and tested on a kind cluster in every CI run (rolling update with zero failed requests), liveness/readiness checks, pinned and locked dependencies, an HTTPS front door (Gateway API with Envoy Gateway, certificates from cert-manager, host routing, an edge rate limit), network policies (default deny, one allow-list per component, enforcement proven in CI) | Applying the Terraform to a real AWS account, mTLS between pods |
 
@@ -3011,6 +3013,222 @@ The app starts at Sector 22, Chandigarh. Tap the location at the top to switch t
 
 ---
 
+### Restaurant and rider apps (Phase 14)
+
+A food delivery platform is really three apps: one for customers, one for restaurants and one for delivery partners. Phase 13 built the first. Phase 14 builds the other two, plus the business rules underneath them that QuickServe was still missing: **which rider delivers an order**, **how the customer knows the right person has their food**, and **what the restaurant actually earns**.
+
+- **`/partner`**, for restaurant owners:
+  - the order board, with a countdown on every new order (4 minutes to accept, the rule from [section 6](#6-business-rules-borrowed-from-zomato-and-swiggy)), accept or reject with a reason, then "Start preparing" and "Mark ready";
+  - the menu: switch a dish off for 2 hours, until 9 am tomorrow, or until switched back on; restock with the restock suggestion from [section 4](#4-the-inventory-design-stock-consumed-and-cycles);
+  - the day's sales, with commission, GST on commission and the estimated payout, plus best sellers;
+  - offers the restaurant funds itself;
+  - an "accepting orders" switch, like going offline on Zomato or Swiggy.
+- **`/rider`**, for delivery partners:
+  - orders waiting for a rider, with the pay for each one shown before accepting;
+  - claim one, ride to the restaurant, pick up once it's packed, deliver with the customer's 4-digit code;
+  - today's deliveries and earnings.
+- **Customers** now see who is delivering their order, and their delivery code.
+
+After logging in, an owner lands on `/partner` and a rider on `/rider`. The login screen has a demo button for each account in the seed.
+
+```mermaid
+sequenceDiagram
+    participant C as Customer app
+    participant API
+    participant R as Restaurant app
+    participant D as Rider app
+    C->>API: place order, pay
+    API-->>R: new order on the board (refreshes every 10 s)
+    R->>API: Accept (within 4 min)
+    D->>API: claim from the pool
+    Note over API: one UPDATE ... WHERE rider_id IS NULL
+    API-->>C: "Demo Rider will deliver your order" + code 7834
+    R->>API: Start preparing, Mark ready
+    D->>API: Picked up
+    C-->>D: says "7834" at the door
+    D->>API: DELIVERED + code 7834
+```
+
+### Q: How does an order get a rider?
+
+The real apps **push**. Swiggy assigns each order to the rider its models choose, and it timed this "just in time" so riders arrive as the food is ready instead of crowding the restaurant. It also gives a rider their next order before the current one ends, and puts two orders on one trip (batching) [112]. Researchers from IIT Delhi and Swiggy treat it as a matching problem: assign orders to vehicles, group orders into batches, and keep adapting as vehicles move [113]. All of that needs live rider locations and an optimiser.
+
+QuickServe uses the simpler **pull** model:
+- An order joins the **pool** as soon as the restaurant accepts it. The rider then rides over while the food is cooked, which is the just-in-time idea without the optimiser. Orders that are packed come first in the list, then orders still cooking.
+- A rider taps **Accept** and the order is theirs. The pool shows the restaurant, the distance and the pay, but **not the customer's address**. Only the rider who claims the order sees where it's going, so a customer's address isn't shown to every rider in the city.
+- Before pickup, a rider can hand the order back ("I can't take this order"), and it returns to the pool.
+
+Phase 12's ETA formula already assumed this. Its "assignment delay" is the time an order waits in the pool.
+
+### Q: Ten riders tap "Accept" at the same moment. Who gets the order?
+
+Exactly one, and the database decides. It's the same pattern as the stock counter in [section 4](#4-the-inventory-design-stock-consumed-and-cycles) and the coupon limit in Phase 11: **one conditional UPDATE** that checks and writes in a single statement:
+
+```sql
+UPDATE orders
+SET rider_id = :me, rider_assigned_at = now(), rider_pay = round(20 + 6 * distance_km, 0)
+WHERE id = :order_id
+  AND rider_id IS NULL
+  AND status IN ('ACCEPTED', 'PREPARING', 'READY')
+RETURNING id;
+```
+
+The first UPDATE locks the row. The other nine wait for that lock, then PostgreSQL checks the `WHERE` again against the row that now exists, finds `rider_id` set, and updates nothing. Those riders get `409 Another delivery partner has taken this order`, and their app refreshes the list. `test_ten_riders_tap_accept_at_once_and_one_gets_it` runs it with 10 real threads.
+
+The tempting version reads the order, checks `rider_id is None` in Python, then saves. With ten threads, several of them pass the check before any of them saves, and the last save wins: a lost update.
+
+### Q: How do you stop one rider taking two orders at once?
+
+With a **partial unique index**: a `UNIQUE` rule that applies only to the rows matching a `WHERE` clause [114]:
+
+```sql
+CREATE UNIQUE INDEX uq_orders_one_active_delivery_per_rider ON orders (rider_id)
+WHERE rider_id IS NOT NULL
+  AND status IN ('ACCEPTED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY');
+```
+
+A rider can have hundreds of delivered orders, because delivered rows aren't in the index. But only one row per rider can be "in flight". When an order is delivered or cancelled, it leaves the index, and the rider is free again without any code having to remember to free them.
+
+Why an index and not just a check in the code? The code does check first, to give a friendly message. But picture one rider logged in on two phones, tapping two **different** orders at the same moment. Each claim passes the conditional UPDATE (each order is free), and each check sees "no active order yet", because neither transaction has committed. Only the index sees both rows: the second commit fails with a unique violation, which the API turns into `409 Finish your current delivery`. A test does exactly that with two threads. It's the same idea as the payments table's "one successful payment per order" index: **rules that must never break belong in the database.**
+
+The partial index has a second use. `ix_orders_rider_pool` indexes only the unclaimed accepted orders: usually a handful of rows, however many million finished orders the table holds.
+
+### Q: What is the delivery code, and why does it matter?
+
+It stops the order being marked "delivered" without reaching the customer. Every order gets a 4-digit code when it's placed. The customer sees it on their order screen. The rider has to type it to mark the order `DELIVERED`, and they can only get it from the customer at the door.
+
+The design details are where the security is:
+- **Only the customer can see it.** The API puts the code into an order only when the person asking is that order's customer. If the rider or the restaurant could read it from the API, it would prove nothing. Tests check that the rider and the owner get `null`.
+- **Random from `secrets`, not `random`.** Python's documentation says `secrets` should be used instead of the default generator in the `random` module, which is designed for modelling and simulation, not security [116]. The outputs of `random` can be predicted from earlier ones.
+- **Limited tries.** 4 digits are only 10,000 possibilities. After 5 wrong codes the order is locked for support, so a guess has a 5 in 10,000 (0.05%) chance. Amazon Flex uses the same idea: three wrong codes and the driver can't complete the delivery [121].
+- **The count survives the error.** This one is subtle. A wrong code must raise an error (422), but the error would roll back the transaction, including the `attempts + 1`, and then a rider could guess forever. So the service commits the count first and raises the error afterwards. A test checks that the count is still there after two failed requests.
+- **Compared in constant time.** `secrets.compare_digest` takes the same time however many digits match [116], so response times can't hint at how close a guess was (a timing attack [117]).
+- **Fake-rider scams.** Indian news has reported scammers calling customers and asking for the delivery OTP over the phone. In one Hyderabad case, the Swiggy order showed as delivered seconds after the customer shared it, and no rider ever came [120]. So the app's wording matters: "Tell this code to your delivery partner at the door, after you have the food. Never share it on a phone call."
+
+Zomato's restaurant integration also has a **rider OTP** for the pickup: the restaurant checks the rider's code before handing over the food [122]. QuickServe covers that step differently: only the rider who claimed the order can mark it picked up.
+
+### Q: What does the restaurant actually earn?
+
+Less than the customer pays, and the partner app's sales screen shows why, line by line:
+
+```
+Food sales (delivered orders, with packing)     ₹1,830.00
+Your offers (restaurant-funded discounts)       − ₹0.00
+Commission (20%)                                − ₹366.00
+GST on commission (18%)                         − ₹65.88
+Estimated payout                                ₹1,398.12
+```
+
+- **Commission.** Reports on the industry put Zomato and Swiggy's commission at 16 to 30% of each order. Rapido's lower-commission challenger (8 to 15%) launched in 2025 on exactly that pitch [118]. QuickServe uses 20%, as a setting.
+- **GST on the commission.** The commission is a service the platform sells to the restaurant, so GST (18%) is charged on it.
+- **Whose discount?** A restaurant-funded offer comes out of the restaurant's payout. A platform offer like WELCOME50 is paid by the platform, so it doesn't reduce the restaurant's sales. Zomato's partner terms likewise define gross sales as the amount charged to customers (taxes included), less the discounts the restaurant itself offered [123]. QuickServe's estimate starts from the food before GST, since the GST on food is passed on to the government. The report joins each order to its coupon to tell the two apart.
+- **Delivery and platform fees** go to the platform, so they aren't part of the restaurant's sales at all.
+
+"Missed orders" (paid orders that nobody accepted within 4 minutes) get their own tile. The timeout job (Phase 4) rejects them and refunds the customer.
+
+### Q: How does one query produce all those totals?
+
+With PostgreSQL's **aggregate `FILTER`** [115]. Each total is an aggregate over a different subset of the same rows:
+
+```sql
+SELECT count(*) FILTER (WHERE status = 'DELIVERED'),
+       count(*) FILTER (WHERE status IN ('REJECTED', 'CANCELLED')),
+       sum(item_total + packaging_charge) FILTER (WHERE status = 'DELIVERED'),
+       sum(discount) FILTER (WHERE status = 'DELIVERED' AND coupons.funded_by = 'RESTAURANT')
+FROM orders LEFT JOIN coupons ON coupons.code = orders.coupon_code
+WHERE restaurant_id = :r AND created_at >= :day_start AND created_at < :day_end;
+```
+
+That's one pass over the day's orders instead of one query per number. In SQLAlchemy it's `func.count().filter(Order.status == OrderStatus.DELIVERED)`, which is one more example for the ORM-vs-SQL comparison in [section 5](#5-orm-vs-writing-sql-by-hand). The ORM writes exactly this SQL.
+
+Average prep time uses `FILTER` too. For each order it picks the time of the `ACCEPTED` event and the time of the `READY` event from the status history, then averages the gap.
+
+### Q: What does "today" mean for a restaurant's sales?
+
+A day in **India**, not in UTC. Midnight in Chandigarh is 18:30 UTC the day before. If the report grouped orders by the UTC date, an order at 1 a.m. IST would land in the previous day's sales, and Monday's late-night rush would be split across two days. `business_day()` turns "21 Nov" into an exact range in the restaurant's time zone (`[2026-11-21 00:00+05:30, 2026-11-22 00:00+05:30)`), and the query compares timestamps against that range. A test places orders at 00:30 and 23:50 IST and checks each lands on the right day.
+
+### Q: The order board shows 50 orders. How many queries does that take?
+
+Always **three**, however many orders. That's the N+1 problem again ([section 5](#5-orm-vs-writing-sql-by-hand) and Phase 13), in a new place. Each ticket shows the dishes, the customer's first name and the rider's name. Fetched order by order, that's 1 + 3N queries. Instead:
+1. one query for the orders;
+2. one query for all their dishes (`selectin` loading: `WHERE order_id IN (...)`);
+3. one query for the names of every customer and rider on the page.
+
+`test_the_board_takes_the_same_number_of_queries_for_2_or_12_orders` counts the SQL statements and fails if they grow with the number of orders.
+
+### Q: Why poll every 10 seconds on the board and every 5 seconds for the rider?
+
+Because the numbers come from the business rules, not from guesswork:
+- **Board, 10 s.** A new order has 4 minutes to be accepted. Ten seconds of delay uses about 4% of that window. The browser tab's title shows the count ("(2) New orders"), so a kitchen with the tab in the background still notices.
+- **Rider, 5 s.** The moment the food is packed, the "I've picked it up" button should unlock.
+- **Sales and menu.** These refresh when the screen opens or the tab regains focus. Nobody needs live sales numbers.
+
+As in Phase 13, server-sent events would push changes instead (QuickServe's outbox already produces the events). Polling stays because it's simple and it stops by itself when the screen closes.
+
+### Q: How does the rider app stay simple on the road?
+
+- **Big buttons.** The main actions are 56 px tall, bigger than the 44 px used elsewhere, because riders use them with gloves, on a moving bike, in sunlight.
+- **One task per screen.** No order in progress: the pool. An order in progress: just that order, in two steps, pick up then deliver.
+- **Directions** open Google Maps with the restaurant's or the customer's coordinates.
+- **The code field** accepts digits only (`inputMode="numeric"` brings up the number pad) and stops at 4.
+- **Pay shown before accepting**, like Swiggy's delivery partner app, which puts daily and weekly earnings up front [119]. QuickServe's pay is ₹20 plus ₹6 per km, fixed when the rider claims the order. These are example numbers, not any platform's real rates.
+
+### Q: Does adding two apps slow down the customer app?
+
+No. The partner and rider apps are separate chunks, loaded only when someone opens `/partner` or `/rider` (`React.lazy`, as in Phase 13). The customer's first load went from 106.9 KB to **107.9 KB**: the extra kilobyte is the new routes and the role check. The whole partner app is about 9 KB gzipped, and the rider app about 3 KB, so even they load quickly on a phone.
+
+### Q: What changed in the database?
+
+One migration, tested up, down and up again:
+- **New columns on `orders`:** `rider_id`, `rider_assigned_at`, `rider_pay`, `delivery_code`, `delivery_code_attempts`. Orders placed before this migration have no code, and they can still be delivered without one, so no in-flight order gets stuck during a deploy.
+- **The new NOT NULL column has a server default (`0`).** Since PostgreSQL 11, adding such a column only records the default in the catalogue; it doesn't rewrite the table.
+- **Three new indexes:** the partial unique index, the pool's partial index, and `(rider_id, created_at DESC)` for a rider's history. On a large, busy table, these would be built with `CREATE INDEX CONCURRENTLY`, which doesn't block writes while it builds (and must run outside a transaction).
+
+The notifier learned one new event, `order.rider_assigned` ("Demo Rider will deliver your order"). During a rolling deploy, an old notifier pod could see that event first and not understand it. Phase 8's retries with backoff cover that: the event waits until a new pod handles it.
+
+### Q: How do I try it?
+
+After merging, deploy and seed as usual. The seed's demo reviews now go through claim, pickup and the delivery code, the same path the API enforces.
+
+1. In one browser window, log in as the **customer**, order from Marwar Rasoi and pay.
+2. In a private window, log in as the **restaurant owner**. Pick Marwar Rasoi at the top, accept the order, then start preparing.
+3. In a third window (or your phone), log in as the **rider**. Accept the order from the list.
+4. Back in the customer window, the order now shows the rider's name and the **delivery code**.
+5. As the owner, mark it ready. As the rider, tap "I've picked it up", then type the code. Try a wrong one first to see the tries left.
+6. Check the owner's **Sales** tab and the rider's **Earnings**.
+
+Three windows are needed because each login lives in one tab's `sessionStorage` (Phase 13).
+
+### Q: What's tested?
+
+- **21 new backend tests (271 in total), in `tests/test_partners.py`:**
+  - the pool's order and hidden address;
+  - claims: by one rider, 10 riders at once, one rider on two phones;
+  - unpaid or unaccepted orders can't be claimed; a cancelled order frees its rider; release before pickup only;
+  - the code: format and randomness, wrong tries counted across failed requests, locked after 5, old orders without a code;
+  - the rider's day;
+  - the board's order and constant query count, and other owners getting 404;
+  - sales: payout maths with a restaurant-funded and a platform-funded coupon, IST day boundaries, missed orders;
+  - the open switch and the HTTP endpoints.
+  - The existing journey tests now claim and use the code too.
+- **10 new frontend tests (48 in total):**
+  - the board's countdown, accept, reject with a reason, and the disabled Accept once time is up;
+  - the open switch; a customer opening `/partner`;
+  - switching a dish off until a time; the payout screen;
+  - the pool and a lost race; pickup locked until ready; digits-only code entry;
+  - the customer's delivery code.
+- **A three-browser Playwright journey** against the real API: customer orders, owner accepts and cooks, rider claims, the customer reads the code, the rider enters a wrong code then the right one, then sales, menu and offers.
+
+### Q: What's not built yet?
+
+- **Push dispatch.** Assigning orders to the nearest rider, batching two orders on one trip, and live rider locations on the customer's map.
+- **Cash on delivery.** Every order is prepaid, so riders never collect money.
+- **Support tools.** An admin screen to unlock an order after 5 wrong codes, or reassign a rider.
+- **Weekly settlement.** Real platforms pay restaurants on a schedule, net of commission, refunds and penalties. QuickServe shows a daily estimate.
+- **Restaurant onboarding** (creating a restaurant and its menu) is still API-only.
+
+---
+
 ## 9. DevOps already in the project
 
 ### Q: Why do the tests use a real PostgreSQL instead of SQLite?
@@ -3194,6 +3412,8 @@ These are real, and they make better interview stories than any feature list.
 
 **9. Four files that were never committed (Phase 13).** Everything passed locally: the frontend's 38 tests, the type check, the build. On CI the type check failed at once with "Cannot find module '../lib/money'". The repository's `.gitignore` started from the standard Python template, which ignores `lib/` (a folder Python packaging tools create). Without a leading `/`, a `.gitignore` pattern matches a folder of that name **at any depth**, so `frontend/src/lib/` was silently ignored. `git status` didn't list the four files as new, because ignored files are hidden. **Fix:** `/lib/` and `/lib64/`, so the rule only covers the repository root, and checking the change in a fresh `git clone` before pushing. The lesson: **"works on my machine" can mean "exists only on my machine". Build from a clean clone, as CI does.**
 
+**10. A button that was there but couldn't be seen (Phase 14).** All 48 frontend tests passed, including one that clicks "Reject". Then the first screenshot of the order board showed an empty red box where the Reject button should be. The button had the classes `btn ghost danger`. A new `.btn.danger` rule (a solid red button for the dialog's final "Reject order") also matched it, gave it a red background, and its red text vanished into it. Testing Library finds a button by its role and name, not by whether a person can read it, so the tests couldn't notice. **Fix:** `.btn.danger:not(.ghost)`. The lesson: **tests check what the code does; only looking at the screen checks what people see.** The Playwright journey now saves screenshots of every screen for that reason.
+
 ---
 
 ## 12. Project structure and API
@@ -3226,7 +3446,8 @@ quickserve/
 │       ├── reviews/              one review per delivered order, atomic rating totals, recount job (Phase 12)
 │       ├── menu/                 model (MenuItem, InventoryCycle), repository, service, cache,
 │       │                         analytics (ORM + raw SQL versions), schema, router
-│       ├── orders/               model, state_machine, repository, service (quote + place), schema, router
+│       ├── orders/               model, state_machine, repository, service (quote + place), schema, router,
+│       │                         dispatch (rider pool and claims), kitchen (order board, sales) (Phase 14)
 │       ├── pricing/              calculator (pure: every fee, GST, the itemised bill), geo (distance),
 │       │                         rain switch (SurgeFlag), GET /pricing (Phase 11)
 │       ├── coupons/              model (Coupon, CouponRedemption), race-safe redeem/release, router (Phase 11)
@@ -3240,10 +3461,12 @@ quickserve/
 │   ├── race_demo.py              naive vs atomic stock counter, live
 │   ├── show_sql.py               print the SQL our ORM code generates
 │   └── create_test_db.sql        runs on first Postgres container start
-├── tests/                        250 tests, real PostgreSQL and Redis
-├── frontend/                     customer app (Phase 13): React + TypeScript (Vite)
+├── tests/                        271 tests, real PostgreSQL and Redis
+├── frontend/                     the apps (Phases 13-14): React + TypeScript (Vite)
 │   ├── src/api/                  openapi-fetch client, generated schema.d.ts, TanStack Query hooks
-│   ├── src/pages/                home, search, menu, cart, order, my orders, login
+│   ├── src/pages/                customer: home, search, menu, cart, order, my orders, login
+│   ├── src/partner/              restaurant partner app: order board, menu, sales, offers (Phase 14)
+│   ├── src/rider/                rider app: pool, delivery with the code, earnings (Phase 14)
 │   ├── src/theme/                regional borders and dish drawings (SVG), region picker
 │   ├── src/cart/, src/auth/      cart rules (paise maths), login state
 │   ├── openapi.json              the API contract, exported by scripts/export_openapi.py
@@ -3284,6 +3507,10 @@ quickserve/
 | GET | `/users/me` | logged in | Who am I? |
 | GET | `/restaurants` | anyone | List restaurants (paginated) |
 | GET | `/restaurants/{id}` | anyone | One restaurant (for a menu page opened from a link) |
+| GET | `/restaurants/mine` | restaurant owner | The restaurants you own |
+| PUT | `/restaurants/{id}/open` | owner | Start or stop accepting new orders |
+| GET | `/restaurants/{id}/orders?view=active\|recent` | owner | The order board: paid orders to act on, oldest first; or finished ones |
+| GET | `/restaurants/{id}/sales?day=` | owner | One day's orders, food sales, commission, GST on commission, estimated payout (IST) |
 | GET | `/restaurants/near?lat=&lng=&sort=` | anyone | Restaurants that deliver here, with distance, ETA, fee and rating; sort by `distance`, `rating` or `eta`; `cuisine`, `min_rating` filters |
 | GET | `/search?q=&lat=&lng=` | anyone | Dishes and restaurants that deliver here; typo-tolerant |
 | PUT | `/restaurants/{id}/profile` | owner | Cuisines and usual prep time |
@@ -3299,8 +3526,11 @@ quickserve/
 | GET | `/restaurants/{id}/best-sellers?days=7` | owner | Ranked report |
 | POST | `/orders` | customer | Place an order (reserves stock, all or nothing) |
 | GET | `/orders?limit=&offset=` | customer | Your orders, newest first, with restaurant name and item count (one query) |
-| GET | `/orders/{id}`, `/orders/{id}/timeline` | its customer, owner, rider (once READY), admin | Order with bill; status history |
-| PATCH | `/orders/{id}/status` | owner, rider, admin | Status changes allowed for your role |
+| GET | `/orders/{id}`, `/orders/{id}/timeline` | its customer, owner, its rider, admin | Order with bill (the delivery code only for its customer); status history |
+| PATCH | `/orders/{id}/status` | owner, its rider, admin | Status changes allowed for your role; `DELIVERED` needs the customer's `delivery_code` |
+| GET | `/rider/pool` | rider | Accepted orders waiting for a rider (no customer address) |
+| POST | `/orders/{id}/claim`, `/orders/{id}/release` | rider | Take an order from the pool (409 if taken, or if you have one in progress); hand it back before pickup |
+| GET | `/rider/me` | rider | Your delivery in progress, today's deliveries and earnings |
 | POST | `/orders/{id}/cancel` | its customer (before acceptance), admin | Cancel with a reason |
 | POST | `/orders/{id}/payments` | its customer | Mock payment; needs `Idempotency-Key`; `?simulate=failure` to test failures |
 | GET | `/orders/{id}/payments`, `/payments/{id}` | same as the order | Payment attempts |
@@ -3333,8 +3563,8 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 | **11. Pricing** (done) | Distance-based delivery fee (haversine x detour index, slabs, radius), free delivery for big orders nearby, small order fee, peak / late-night / rain surge (rain is an admin switch that expires), coupons (percent with cap, flat, minimums, first order, per-customer and total limits, platform- or restaurant-funded) with race-safe redemption, GST after discount, `POST /orders/quote` and `expected_total` | Pure functions for business rules, atomic counters and row locks, CHECK constraints as a safety net, time zones, price-change protection |
 | **12. Discovery** (done) | Restaurants near me (bounding box on an index, then the exact distance checkout uses), delivery time from Swiggy's max(first mile, prep) + last mile, sort by distance / time / Bayesian-average rating, cuisine and rating filters; dish and restaurant search with full-text, trigram and typo fallback; reviews only for delivered orders, once, with atomic running totals, a CHECK constraint and a recount job | Bounding boxes and B-trees, `EXPLAIN`, GIN indexes, generated columns, Bayesian averages, denormalised counters and reconciliation, lost updates |
 | **13. Frontend: customer app** (done) | React + TypeScript (Vite): near me, search, menu, cart, the checkout bill from `/orders/quote` with price-change handling, pay with one idempotency key per attempt, live order status, reviews, my orders; a royal Indian menu theme with regional borders; nginx with CSP and immutable caching, served on the same origin through the Gateway; a 150 KB JavaScript budget in CI | API types generated from OpenAPI with contract tests, server vs client state, token storage trade-offs, open redirects, HTTP caching, performance budgets, accessibility |
-| **14. Frontend: restaurant and rider screens** (next) | Owner dashboard (incoming orders, accept/prepare, menu and stock, coupons, today's sales); rider view (assigned orders, pick up, deliver) | Role-based UI on top of the backend's role checks |
-| **15. Tracing** | OpenTelemetry traces across browser, Envoy, API, SQL, outbox and notifier, viewed in Jaeger; N+1 detection; sampling | Distributed tracing, context propagation through the outbox, the cost of tracing |
+| **14. Restaurant and rider apps** (done) | Partner app: order board with the accept countdown, reject reasons, menu switches and restocks, the day's sales with commission and payout, restaurant-funded offers, accepting-orders switch. Rider app: pool without addresses, race-safe claims, one active delivery per rider (partial unique index), pickup once ready, delivery with the customer's code (limited tries), earnings | Pull vs push dispatch, conditional UPDATE races, partial unique indexes, secure random codes and brute-force limits, aggregate FILTER, business days and time zones, payout maths |
+| **15. Tracing** (next) | OpenTelemetry traces across browser, Envoy, API, SQL, outbox and notifier, viewed in Jaeger; N+1 detection; sampling | Distributed tracing, context propagation through the outbox, the cost of tracing |
 | **16. Live on AWS** | Apply the Phase 6 Terraform, a real domain with a Let's Encrypt certificate, GitHub Actions deploying after each merge, a smoke test against the live URL, then `terraform destroy` | Continuous delivery, real cloud costs, why one server instead of EKS |
 
 ---
@@ -3426,6 +3656,16 @@ Each phase ends with something you can show: a passing CI run, a live URL, a das
 **What's a performance budget?** A limit on something that hurts users (here, 150 KB of gzipped JavaScript before the first screen) that fails the build when exceeded, so the app can't get slower one dependency at a time.
 
 **What's an open redirect?** A `?next=` parameter that sends people to any URL after login, so attackers can use your real login page to forward victims to a fake one. Only accept paths on your own site, and reject `//host`.
+
+**How do you make sure only one rider gets an order?** A conditional UPDATE (`SET rider_id = :me WHERE id = :id AND rider_id IS NULL`). Concurrent claims queue on the row lock, the WHERE clause is re-checked, and the losers update zero rows and get a 409.
+
+**How do you enforce "at most one active X per user" in the database?** A partial unique index: `CREATE UNIQUE INDEX ... (rider_id) WHERE status IN (active statuses)`. Finished rows leave the index automatically, and two concurrent inserts or updates can't both commit.
+
+**How do you design a delivery OTP?** Random from a secure generator, visible only to the customer, a limited number of tries with the counter committed even when the request fails, a constant-time comparison, and a clear "never share on a call" message.
+
+**Why does "today" need a time zone?** Business days are local. Midnight IST is 18:30 UTC, so grouping by the UTC date moves late-night orders to the wrong day. Turn the local day into a timestamp range and compare against that.
+
+**How do you get many totals in one query?** Aggregate `FILTER`: `count(*) FILTER (WHERE status = 'DELIVERED')`, `sum(x) FILTER (WHERE ...)`, all in one scan of the rows.
 
 **What's unit economics in FinOps?** Cost per unit of business value. For us: infrastructure cost per completed order, tracked as orders grow.
 
@@ -3546,3 +3786,15 @@ Business and tax figures change often; the dates show when each was reported.
 109. Vite documentation, *Why Vite* (source served over native ES modules in development, bundled for production). https://vite.dev/guide/why
 110. openapi-typescript and openapi-fetch documentation (types generated from an OpenAPI schema; a type-checked `fetch` client). https://openapi-ts.dev/openapi-fetch/
 111. nginx documentation, *ngx_http_headers_module*, `add_header` (a level inherits `add_header` lines only when it has none of its own). https://nginx.org/en/docs/http/ngx_http_headers_module.html#add_header
+112. Shubhanjali Chakravarty, *Case Study: Swiggy's Delivery Model*, IUP Journal (March 2021): Just in Time assignment, Next Order Assignment and batching. https://www.iupindia.in/0321/Entrepreneurship%20Development/Swiggys-Delivery-Model.asp
+113. Manas Joshi, Arshdeep Singh, Sayan Ranu, Amitabha Bagchi, Priyank Karia and Puneet Kala, *Batching and Matching for Food Delivery in Dynamic Road Networks* (IIT Delhi and Swiggy, arXiv:2008.12905). https://arxiv.org/abs/2008.12905
+114. PostgreSQL 16 documentation, *11.8 Partial Indexes* (a unique index over a subset of rows). https://www.postgresql.org/docs/16/indexes-partial.html
+115. PostgreSQL 16 documentation, *4.2.7 Aggregate Expressions* (`FILTER (WHERE ...)`). https://www.postgresql.org/docs/16/sql-expressions.html#SYNTAX-AGGREGATES
+116. Python documentation, *secrets: Generate secure random numbers for managing secrets* (`randbelow`, `compare_digest`; use instead of `random` for security). https://docs.python.org/3/library/secrets.html
+117. Coda Hale, *A Lesson in Timing Attacks* (linked from the Python `secrets` documentation). https://codahale.com/a-lesson-in-timing-attacks/
+118. Storyboard18, *Rapido slashes food delivery charges by half to take on Zomato, Swiggy* (9 June 2025): 8-15% vs the 16-30% typically charged by Zomato and Swiggy. https://www.storyboard18.com/how-it-works/rapido-slashes-food-delivery-charges-by-half-to-take-on-zomato-swiggy-69346.htm
+119. Swiggy blog, *A New App To Empower our Delivery Partners* (daily and weekly earnings shown up front). https://blog.swiggy.com/?p=7950
+120. The Logical Indian, *Hyderabad man loses Swiggy order after sharing OTP with fake Pista House caller*. https://thelogicalindian.com/i-feel-foolish-hyderabad-man-loses-swiggy-order-after-sharing-otp-with-fake-pista-house-caller/
+121. Ridesharing Driver, *Amazon OTP password* (three incorrect codes prevent completing the delivery). https://www.ridesharingdriver.com/amazon-otp-password/
+122. UrbanPiper API documentation, *Aggregator constraints: Zomato* (rider OTP for pickup). https://api-docs.urbanpiper.com/downstream/aggregator-constraints/zomato
+123. Eternal (Zomato), *Online ordering terms for restaurant partners* (definition of Gross Sales). https://www.eternal.com/policies/online-ordering/
