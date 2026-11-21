@@ -1,5 +1,6 @@
-# One small ARM (Graviton) server that runs the QuickServe image from ghcr.io:
-# a migration job, then the API, the worker and a local Redis, all in Docker.
+# One small ARM (Graviton) server that runs QuickServe from ghcr.io, all in
+# Docker: Caddy (HTTPS) in front, the API (blue/green), the React app, the
+# worker, the notifier, Redis and Jaeger. A migration job runs on each deploy.
 #
 # It has no SSH key and no port 22 open. You get a shell through AWS Systems
 # Manager Session Manager instead, which is logged and needs no open port.
@@ -32,6 +33,40 @@ variable "image" {
   description = "Container image without a tag."
   type        = string
   default     = "ghcr.io/revant123/quickserve"
+}
+
+variable "web_image" {
+  description = "The React app's image (nginx), without a tag. Published with the same tags as the API."
+  type        = string
+  default     = "ghcr.io/revant123/quickserve-app"
+}
+
+variable "domain" {
+  description = "The site's name, e.g. quickserve-you.duckdns.org. Caddy gets a Let's Encrypt certificate for it. Empty: plain HTTP on the server's IP."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.domain == "" || can(regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$", var.domain))
+    error_message = "domain must be a lowercase host name such as quickserve-you.duckdns.org (no https://, no slash)."
+  }
+}
+
+variable "trace_sample_percent" {
+  description = "Share of ordinary traces Jaeger keeps. Errors, slow requests and suspected N+1 are always kept."
+  type        = number
+  default     = 10
+}
+
+# Pinned versions: a deploy must never pick up a new Caddy or Jaeger by surprise.
+variable "caddy_image" {
+  type    = string
+  default = "caddy:2.11.9-alpine"
+}
+
+variable "jaeger_image" {
+  type    = string
+  default = "jaegertracing/jaeger:2.21.0"
 }
 
 variable "image_tag" {
@@ -105,6 +140,25 @@ resource "aws_iam_instance_profile" "app" {
 
 # ---------- The server ----------
 
+locals {
+  user_data = templatefile("${path.module}/templates/user_data.sh.tftpl", {
+    image                = var.image
+    web_image            = var.web_image
+    image_tag            = var.image_tag
+    region               = data.aws_region.current.region
+    ssm_prefix           = var.ssm_prefix
+    app_environment      = var.app_environment
+    domain               = var.domain
+    trace_sample_percent = var.trace_sample_percent
+    caddy_image          = var.caddy_image
+    jaeger_image         = var.jaeger_image
+    # Inserted as they are: their own {$...} and ${env:...} are for Caddy and
+    # Jaeger, not for Terraform.
+    caddyfile     = trimspace(file("${path.module}/templates/Caddyfile"))
+    jaeger_config = trimspace(file("${path.module}/../../k8s/tracing/jaeger-config.yaml"))
+  })
+}
+
 resource "aws_instance" "app" {
   ami                         = data.aws_ssm_parameter.al2023_arm64.value
   instance_type               = var.instance_type
@@ -134,13 +188,10 @@ resource "aws_instance" "app" {
     delete_on_termination = true
   }
 
-  user_data = templatefile("${path.module}/templates/user_data.sh.tftpl", {
-    image           = var.image
-    image_tag       = var.image_tag
-    region          = data.aws_region.current.region
-    ssm_prefix      = var.ssm_prefix
-    app_environment = var.app_environment
-  })
+  # gzip, then base64: EC2 accepts at most 16 KB of user data, and this script
+  # (with the Caddy and Jaeger configs inside) is close to that. cloud-init
+  # unzips it before running it. Compressed it's about a third of the size.
+  user_data_base64 = base64gzip(local.user_data)
   # Changing the boot script builds a fresh server instead of silently keeping
   # the old one. Routine deploys don't touch Terraform at all.
   user_data_replace_on_change = true
@@ -154,6 +205,40 @@ resource "aws_instance" "app" {
   }
 }
 
+# ---------- Deploys from GitHub Actions (Phase 16) ----------
+# The deploy job may run THIS document and nothing else, so "may deploy" never
+# means "may run any command as root". The tag must look like sha-<commit>
+# (or "rollback"): SSM rejects anything else before it reaches the shell, so
+# a tag can't smuggle in a command.
+resource "aws_ssm_document" "deploy" {
+  name            = "${var.name}-deploy"
+  document_type   = "Command"
+  document_format = "JSON"
+  content = jsonencode({
+    schemaVersion = "2.2"
+    description   = "Deploy one QuickServe image tag (or roll back to the previous one)"
+    parameters = {
+      tag = {
+        type           = "String"
+        description    = "sha-<commit>, or rollback"
+        allowedPattern = local.deploy_tag_pattern
+      }
+    }
+    mainSteps = [{
+      action = "aws:runShellScript"
+      name   = "deploy"
+      inputs = {
+        timeoutSeconds = "600"
+        runCommand     = ["/opt/quickserve/deploy.sh {{ tag }}"]
+      }
+    }]
+  })
+}
+
+locals {
+  deploy_tag_pattern = "^(sha-[0-9a-f]{7,40}|rollback)$"
+}
+
 output "instance_id" {
   value = aws_instance.app.id
 }
@@ -164,4 +249,21 @@ output "public_ip" {
 
 output "public_dns" {
   value = aws_instance.app.public_dns
+}
+
+output "instance_arn" {
+  value = aws_instance.app.arn
+}
+
+output "deploy_document_name" {
+  value = aws_ssm_document.deploy.name
+}
+
+output "deploy_document_arn" {
+  value = aws_ssm_document.deploy.arn
+}
+
+output "user_data_bytes" {
+  description = "EC2 accepts at most 16 KB of user data: the compressed script, before base64."
+  value       = { script = length(local.user_data), compressed = floor(length(base64gzip(local.user_data)) * 3 / 4) }
 }

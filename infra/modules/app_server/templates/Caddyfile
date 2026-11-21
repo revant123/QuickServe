@@ -1,0 +1,55 @@
+# Caddy on the live server (Phase 16). Caddy is the only container with
+# public ports. It gets and renews the HTTPS certificate from Let's Encrypt
+# by itself, then sends each request to the API or to the app's nginx.
+#
+# The {$NAME} values come from environment variables set by deploy.sh:
+#   SITE_ADDRESS  quickserve-you.duckdns.org (or :80 when there's no domain yet)
+#   API_BLUE / API_GREEN / WEB  the containers to send requests to
+{
+	# No admin API: nothing on the server can reconfigure Caddy over HTTP.
+	admin off
+}
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# The API: /api/..., Swagger UI and the health checks.
+	@api path /api/* /docs /docs/* /openapi.json /health /health/*
+	handle @api {
+		# Blue/green: both API containers are always listed, but at any moment
+		# only one or two of them exist. Caddy checks each one every 2 seconds
+		# and sends requests only to a healthy one.
+		reverse_proxy {$API_BLUE} {$API_GREEN} {
+			lb_policy first
+			health_uri /health/ready
+			health_interval 2s
+			health_timeout 2s
+			# If the chosen container stops mid-swap, try the other one (or try
+			# again) for up to 10 s instead of failing the customer's request.
+			lb_try_duration 10s
+			lb_try_interval 250ms
+			fail_duration 10s
+			header_up X-Request-ID {http.request.uuid}
+		}
+	}
+
+	# Everything else is the React app (customer, partner and rider screens).
+	# A deploy restarts this container; the same retry hides the 1-second gap.
+	handle {
+		reverse_proxy {$WEB} {
+			lb_try_duration 10s
+			lb_try_interval 250ms
+		}
+	}
+
+	header {
+		# Browsers remember to use HTTPS for this site for a year.
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

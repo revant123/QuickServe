@@ -118,7 +118,7 @@ def test_full_order_journey(client, rider, admin):
 
 
 def test_health_endpoints(client):
-    assert client.get("/health").json() == {"status": "alive"}
+    assert client.get("/health").json() == {"status": "alive", "version": "1.0.0", "commit": "unknown"}
     assert client.get("/health/ready").json()["database"] == "ok"
 
 

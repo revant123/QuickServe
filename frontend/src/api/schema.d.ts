@@ -882,6 +882,9 @@ export interface paths {
          * @description Liveness: is the process up? Kubernetes restarts the container if this fails.
          *     Deliberately does NOT touch the database: a DB outage should not make
          *     Kubernetes kill every healthy app container in a restart loop.
+         *
+         *     It also says which build is running: after a deploy, the live smoke test
+         *     checks `commit` to prove the NEW version answers, not the old one.
          */
         get: operations["liveness_health_get"];
         put?: never;

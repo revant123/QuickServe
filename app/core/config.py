@@ -24,6 +24,9 @@ class Settings(BaseSettings):
 
     app_name: str = "QuickServe API"
     environment: str = "local"
+    # The Git commit the image was built from (Phase 16). The Dockerfile sets it
+    # from a build argument; a local run says "unknown".
+    git_sha: str = "unknown"
 
     # postgresql+psycopg:// selects the psycopg 3 driver. A bare postgresql://
     # URL would make SQLAlchemy look for the older psycopg2 driver.

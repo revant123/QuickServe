@@ -3029,7 +3029,7 @@
   "info": {
     "description": "Food ordering and delivery platform: a learning project for backend, DevOps and FinOps.",
     "title": "QuickServe API",
-    "version": "0.5.0"
+    "version": "1.0.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -5554,7 +5554,7 @@
     },
     "/health": {
       "get": {
-        "description": "Liveness: is the process up? Kubernetes restarts the container if this fails.\nDeliberately does NOT touch the database: a DB outage should not make\nKubernetes kill every healthy app container in a restart loop.",
+        "description": "Liveness: is the process up? Kubernetes restarts the container if this fails.\nDeliberately does NOT touch the database: a DB outage should not make\nKubernetes kill every healthy app container in a restart loop.\n\nIt also says which build is running: after a deploy, the live smoke test\nchecks `commit` to prove the NEW version answers, not the old one.",
         "operationId": "liveness_health_get",
         "responses": {
           "200": {

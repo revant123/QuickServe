@@ -49,6 +49,12 @@ COPY migrations/ ./migrations/
 COPY alembic.ini ./
 COPY scripts/ ./scripts/
 
+# Phase 16: which commit is this? CI passes --build-arg GIT_SHA=<commit> and
+# /health reports it. It comes last, so a new commit only rebuilds this one tiny
+# layer, and all the layers above stay cached.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
+
 USER app
 
 EXPOSE 8000
