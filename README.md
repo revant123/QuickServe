@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/revant123/quickserve/actions/workflows/ci.yml/badge.svg)](https://github.com/revant123/quickserve/actions/workflows/ci.yml)
 
+**Built with Claude Code:** the agent wrote most of the code on feature branches; I planned each phase, reviewed every PR and merged all 24. [How I worked with it →](AI_WORKFLOW.md)
+
 A cloud-native food ordering and delivery platform built using Python, FastAPI, SQLAlchemy, and PostgreSQL. Developed with a modular monolith architecture, gradually incorporating Docker, CI/CD, AWS, Kubernetes, Terraform, monitoring, and FinOps practices.
 
 It is built to learn three things properly:
